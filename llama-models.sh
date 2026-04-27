@@ -51,6 +51,59 @@ require_command() {
   fi
 }
 
+normalize_for_search() {
+  local text="$1"
+
+  # Lowercase and normalize separators so token search is punctuation-insensitive.
+  printf "%s" "$text" \
+    | tr '[:upper:]' '[:lower:]' \
+    | sed -E 's/[^a-z0-9]+/ /g; s/^ +//; s/ +$//; s/ +/ /g'
+}
+
+candidate_matches_query() {
+  local candidate="$1"
+  local query="$2"
+  local normalized_candidate normalized_query token
+
+  normalized_candidate="$(normalize_for_search "$candidate")"
+  normalized_query="$(normalize_for_search "$query")"
+
+  if [[ -z "$normalized_query" ]]; then
+    return 1
+  fi
+
+  for token in $normalized_query; do
+    if [[ " $normalized_candidate " != *" $token "* ]]; then
+      return 1
+    fi
+  done
+
+  return 0
+}
+
+candidate_token_score() {
+  local candidate="$1"
+  local query="$2"
+  local normalized_candidate normalized_query token
+  local score=0
+
+  normalized_candidate="$(normalize_for_search "$candidate")"
+  normalized_query="$(normalize_for_search "$query")"
+
+  if [[ -z "$normalized_query" ]]; then
+    printf "0\n"
+    return
+  fi
+
+  for token in $normalized_query; do
+    if [[ " $normalized_candidate " == *" $token "* ]]; then
+      score=$((score + 1))
+    fi
+  done
+
+  printf "%s\n" "$score"
+}
+
 model_repo_from_path() {
   local model_path="$1"
   local rel owner repo
@@ -146,22 +199,47 @@ resolve_model() {
     return 0
   fi
 
-  local lowered_input
-  lowered_input="$(printf "%s" "$input" | tr '[:upper:]' '[:lower:]')"
-
   local -a matches=()
-  local i path repo file lowered_candidate
+  local i path repo file candidate_text
   for i in "${!MODELS[@]}"; do
     path="${MODELS[$i]}"
     repo="$(model_repo_from_path "$path")"
     file="$(basename "$path")"
-    lowered_candidate="$(printf "%s %s %s" "$path" "$repo" "$file" | tr '[:upper:]' '[:lower:]')"
-    if [[ "$lowered_candidate" == *"$lowered_input"* ]]; then
+    candidate_text="$(printf "%s %s %s" "$path" "$repo" "$file")"
+    if candidate_matches_query "$candidate_text" "$input"; then
       matches+=("$i")
     fi
   done
 
   if [[ ${#matches[@]} -eq 0 ]]; then
+    # Fallback: choose the unique best partial token match.
+    local best_score=0
+    local best_idx=-1
+    local best_tied=0
+    local score
+
+    for i in "${!MODELS[@]}"; do
+      path="${MODELS[$i]}"
+      repo="$(model_repo_from_path "$path")"
+      file="$(basename "$path")"
+      candidate_text="$(printf "%s %s %s" "$path" "$repo" "$file")"
+      score="$(candidate_token_score "$candidate_text" "$input")"
+
+      if (( score > best_score )); then
+        best_score=$score
+        best_idx=$i
+        best_tied=0
+      elif (( score > 0 && score == best_score )); then
+        best_tied=1
+      fi
+    done
+
+    if (( best_score > 0 && best_tied == 0 && best_idx >= 0 )); then
+      echo "Info: no exact token match found; using best fuzzy match (score: $best_score)." >&2
+      printf "%s\n" "${MODELS[$best_idx]}"
+      return 0
+    fi
+
     echo "Error: no model matched query: $input" >&2
     return 1
   fi

@@ -59,6 +59,39 @@ Start directly from HF repo:
 ./llama-models.sh hf ggml-org/gemma-4-e4b-it-GGUF --port 8080
 ```
 
+## Quantization selection
+
+When using `hf`, append `:<QUANT>` to the repo id:
+
+```bash
+./llama-models.sh hf ggml-org/gemma-4-e4b-it-GGUF:Q5_K_M
+```
+
+Notes:
+
+- Quant names are case-insensitive in `llama-server`.
+- If you do not provide a quant, `llama-server` chooses its default (typically `Q4_K_M`).
+- To force an exact filename from a repo, pass `--hf-file`:
+
+```bash
+./llama-models.sh hf ggml-org/gemma-4-e4b-it-GGUF --hf-file gemma-4-E4B-it-Q4_K_M.gguf
+```
+
+If the model is already cached locally, `start` can match by query text:
+
+```bash
+./llama-models.sh start Q5_K_M
+```
+
+You can also provide multiple terms (space-separated, order-independent):
+
+```bash
+./llama-models.sh start "Q5_K_M gemma 4"
+```
+
+If no exact token match exists, the script can fall back to the unique best local match.
+Example: if only `Q4_K_M` is cached, querying `Q5_K_M gemma 4` will pick that `Q4_K_M` model.
+
 ## Optional environment variables
 
 - `LLAMA_SERVER_CMD` (default: `llama-server`)
