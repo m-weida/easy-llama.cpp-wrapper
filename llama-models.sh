@@ -4,6 +4,7 @@ set -euo pipefail
 SCRIPT_NAME="$(basename "$0")"
 LLAMA_SERVER_CMD="${LLAMA_SERVER_CMD:-llama-server}"
 NGL_DEFAULT="${NGL_DEFAULT:-99}"
+LLAMA_AUTO_MMPROJ="${LLAMA_AUTO_MMPROJ:-1}"
 
 if [[ -n "${HF_HUB_CACHE:-}" ]]; then
   HF_CACHE_ROOT="$HF_HUB_CACHE"
@@ -104,6 +105,85 @@ candidate_token_score() {
   printf "%s\n" "$score"
 }
 
+autoload_mmproj_enabled() {
+  case "$LLAMA_AUTO_MMPROJ" in
+    0|false|no|off)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
+has_mmproj_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --mmproj|--mmproj=*|--mmproj-file|--mmproj-file=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+find_mmproj_for_model() {
+  local model_path="$1"
+  local model_dir candidate candidate_path
+  local -a candidates=()
+  local -a scores=()
+  local i best_score=0 best_idx=-1 best_tied=0 score
+  local model_text
+
+  model_dir="$(dirname "$model_path")"
+  model_text="$(basename "$model_path")"
+
+  while IFS= read -r candidate; do
+    candidate_path="$candidate"
+    candidates+=("$candidate_path")
+    scores+=("$(candidate_token_score "$(basename "$candidate_path")" "$model_text")")
+  done < <(
+    # match any file containing 'mmproj' (e.g. 'mmproj-...', 'name.mmproj-...', etc.)
+    find "$model_dir" -maxdepth 1 \( -type f -o -type l \) -iname '*mmproj*' 2>/dev/null | sort
+  )
+
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  if [[ ${#candidates[@]} -eq 1 ]]; then
+    echo "Info: auto-selected mmproj: ${candidates[0]}" >&2
+    printf "%s\n" "${candidates[0]}"
+    return 0
+  fi
+
+  for i in "${!candidates[@]}"; do
+    score="${scores[$i]}"
+    if (( score > best_score )); then
+      best_score=$score
+      best_idx=$i
+      best_tied=0
+    elif (( score > 0 && score == best_score )); then
+      best_tied=1
+    fi
+  done
+
+  if (( best_score > 0 && best_tied == 0 && best_idx >= 0 )); then
+    echo "Info: auto-selected mmproj: ${candidates[$best_idx]}" >&2
+    printf "%s\n" "${candidates[$best_idx]}"
+    return 0
+  fi
+
+  echo "Warning: found multiple mmproj candidates next to model, but could not choose one unambiguously." >&2
+  for candidate in "${candidates[@]}"; do
+    echo "  $candidate" >&2
+  done
+  return 1
+}
+
 model_repo_from_path() {
   local model_path="$1"
   local rel owner repo
@@ -129,7 +209,9 @@ collect_models() {
   fi
 
   while IFS= read -r path; do
-    if [[ "$(basename "$path")" == mmproj-* ]]; then
+    # skip GGUF files that were generated from .mmproj exports
+    # (they often include the substring 'mmproj' in the filename)
+    if [[ "$(basename "$path")" == *mmproj* ]]; then
       continue
     fi
     MODELS+=("$path")
@@ -272,10 +354,22 @@ cmd_start() {
   local model_path
   model_path="$(resolve_model "$model_ref")"
 
-  echo "Using model: $model_path"
-  echo "Running: $LLAMA_SERVER_CMD -m \"$model_path\" -ngl $NGL_DEFAULT $*"
+  local -a server_args=("-m" "$model_path" "-ngl" "$NGL_DEFAULT")
+  if autoload_mmproj_enabled && ! has_mmproj_arg "$@"; then
+    local mmproj_path
+    if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
+      server_args+=("--mmproj" "$mmproj_path")
+    fi
+  fi
 
-  "$LLAMA_SERVER_CMD" -m "$model_path" -ngl "$NGL_DEFAULT" "$@"
+  if [[ $# -gt 0 ]]; then
+    server_args+=("$@")
+  fi
+
+  echo "Using model: $model_path"
+  echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"
+
+  "$LLAMA_SERVER_CMD" "${server_args[@]}"
 }
 
 cmd_hf() {

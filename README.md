@@ -7,6 +7,7 @@ Small helper script for `llama.cpp` (`llama-server`) on macOS/Linux.
 - Lists locally cached Hugging Face GGUF models
 - Starts a local GGUF model with `-ngl 99` by default
 - Starts directly from Hugging Face via `-hf`
+- Auto-loads a sibling `mmproj` file for `start` when one is found
 
 Script: `./llama-models.sh`
 
@@ -53,6 +54,15 @@ Pass extra `llama-server` args:
 ./llama-models.sh start 1 --port 8080 --ctx-size 8192
 ```
 
+If a matching `mmproj` file is next to the resolved model, `start` adds it automatically.
+If you already pass `--mmproj`, the script leaves it alone.
+
+You can disable automatic `mmproj` loading with:
+
+```bash
+LLAMA_AUTO_MMPROJ=0 ./llama-models.sh start 1
+```
+
 Start directly from HF repo:
 
 ```bash
@@ -96,6 +106,7 @@ Example: if only `Q4_K_M` is cached, querying `Q5_K_M gemma 4` will pick that `Q
 
 - `LLAMA_SERVER_CMD` (default: `llama-server`)
 - `NGL_DEFAULT` (default: `99`)
+- `LLAMA_AUTO_MMPROJ` (default: `1`)
 - `HF_HUB_CACHE` (explicit HF hub cache path)
 - `HF_HOME` (uses `$HF_HOME/hub`)
 
