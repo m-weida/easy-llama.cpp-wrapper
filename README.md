@@ -8,6 +8,7 @@ Small helper script for `llama.cpp` (`llama-server`) on macOS/Linux.
 - Starts a local GGUF model with `-ngl 99` by default
 - Starts directly from Hugging Face via `-hf`
 - Auto-loads a sibling `mmproj` file for `start` when one is found
+- Can preview and remove a cached model with a confirmation prompt
 
 Script: `./llama-models.sh`
 
@@ -36,6 +37,12 @@ Start by index from list:
 ./llama-models.sh start 1
 ```
 
+Preview and remove by index:
+
+```bash
+./llama-models.sh remove 1
+```
+
 Start by search query:
 
 ```bash
@@ -56,6 +63,8 @@ Pass extra `llama-server` args:
 
 If a matching `mmproj` file is next to the resolved model, `start` adds it automatically.
 If you already pass `--mmproj`, the script leaves it alone.
+
+`remove` prints the exact paths it will delete, then asks for confirmation before removing anything. The prompt defaults to `y/N`, so pressing Enter aborts the deletion.
 
 You can disable automatic `mmproj` loading with:
 

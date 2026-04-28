@@ -21,12 +21,14 @@ print_help() {
 Usage:
   $SCRIPT_NAME list
   $SCRIPT_NAME start <index|query|/path/to/model.gguf> [llama-server args...]
+  $SCRIPT_NAME remove <index|query|/path/to/model.gguf>
   $SCRIPT_NAME hf <repo-id> [llama-server args...]
   $SCRIPT_NAME help
 
 Commands:
   list    List downloaded GGUF models from Hugging Face cache.
   start   Start llama-server with a local GGUF model and -ngl $NGL_DEFAULT.
+  remove  Preview and remove a local GGUF model plus safe associated files.
   hf      Start llama-server directly from a Hugging Face repo via -hf.
   help    Show this help.
 
@@ -35,6 +37,7 @@ Examples:
   $SCRIPT_NAME start 1
   $SCRIPT_NAME start gemma-4-E4B-it-Q4_K_M
   $SCRIPT_NAME start ~/models/mistral.gguf --port 8080
+  $SCRIPT_NAME remove 1
   $SCRIPT_NAME hf ggml-org/gemma-4-e4b-it-GGUF --port 8080
 
 Config (optional env vars):
@@ -182,6 +185,38 @@ find_mmproj_for_model() {
     echo "  $candidate" >&2
   done
   return 1
+}
+
+collect_removal_targets() {
+  local model_path="$1"
+  local -a targets=("$model_path")
+  local mmproj_path
+
+  if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
+    targets+=("$mmproj_path")
+  fi
+
+  printf "%s\n" "${targets[@]}"
+}
+
+confirm_removal() {
+  local response
+
+  printf "Proceed with deletion? [y/N] "
+  if ! IFS= read -r response < /dev/tty; then
+    printf "\nAborted.\n" >&2
+    return 1
+  fi
+
+  case "$response" in
+    y|Y|yes|YES)
+      return 0
+      ;;
+    *)
+      echo "Aborted." >&2
+      return 1
+      ;;
+  esac
 }
 
 model_repo_from_path() {
@@ -372,6 +407,48 @@ cmd_start() {
   "$LLAMA_SERVER_CMD" "${server_args[@]}"
 }
 
+cmd_remove() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: remove requires <index|query|path>" >&2
+    print_help
+    exit 1
+  fi
+
+  if [[ $# -gt 1 ]]; then
+    echo "Error: remove accepts exactly one <index|query|path> argument" >&2
+    print_help
+    exit 1
+  fi
+
+  local model_ref="$1"
+  local model_path
+  model_path="$(resolve_model "$model_ref")"
+
+  local -a removal_targets=()
+  local target
+  while IFS= read -r target; do
+    [[ -n "$target" ]] && removal_targets+=("$target")
+  done < <(collect_removal_targets "$model_path")
+
+  echo "Will remove the following path(s):"
+  for target in "${removal_targets[@]}"; do
+    echo "  - $target"
+  done
+
+  if ! confirm_removal; then
+    return 1
+  fi
+
+  for target in "${removal_targets[@]}"; do
+    if [[ -e "$target" || -L "$target" ]]; then
+      rm -f -- "$target"
+      echo "Removed: $target"
+    else
+      echo "Skipped missing path: $target" >&2
+    fi
+  done
+}
+
 cmd_hf() {
   if [[ $# -lt 1 ]]; then
     echo "Error: hf requires <repo-id>" >&2
@@ -399,6 +476,10 @@ main() {
     start)
       shift
       cmd_start "$@"
+      ;;
+    remove)
+      shift
+      cmd_remove "$@"
       ;;
     hf)
       shift
