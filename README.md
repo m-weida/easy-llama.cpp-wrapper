@@ -1,6 +1,6 @@
 # custom-llama-sh
 
-Small helper script for `llama.cpp` (`llama-server`) on macOS/Linux.
+Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells on macOS, Linux, and Windows.
 
 ## What it does
 
@@ -16,6 +16,43 @@ Script: `./llama-models.sh`
 
 - `llama-server` available in your `PATH`
 - Hugging Face cache present (usually `~/.cache/huggingface/hub`)
+- A bash-compatible shell
+
+Windows notes:
+
+- Run the script from Git Bash, MSYS2, Cygwin, or WSL.
+- `install` creates a symlink, which may require Windows Developer Mode or an elevated shell.
+
+## Install / uninstall
+
+Create a symlink in your home directory after confirming the target path:
+
+```bash
+./llama-models.sh install
+```
+
+By default this installs to `~/llama-models.sh`.
+
+Use a custom symlink path if you prefer:
+
+```bash
+./llama-models.sh install ~/bin/llama-models
+```
+
+Remove the symlink later:
+
+```bash
+./llama-models.sh uninstall
+```
+
+Or remove a custom symlink path:
+
+```bash
+./llama-models.sh uninstall ~/bin/llama-models
+```
+
+`install` always prints the resolved source and target first, then asks for confirmation before creating or replacing anything.
+`uninstall` only removes a symlink when it points back to this repo's script, and asks for confirmation before deleting it.
 
 ## Usage
 
