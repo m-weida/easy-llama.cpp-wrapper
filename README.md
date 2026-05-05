@@ -7,6 +7,7 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 - Lists locally cached Hugging Face GGUF models
 - Starts a local GGUF model with `-ngl 99` by default
 - Starts directly from Hugging Face via `-hf`
+- Enables a safe built-in tool subset by default
 - Auto-loads a sibling `mmproj` file for `start` when one is found
 - Can preview and remove a cached model with a confirmation prompt
 
@@ -98,6 +99,24 @@ Pass extra `llama-server` args:
 ./llama-models.sh start 1 --port 8080 --ctx-size 8192
 ```
 
+The wrapper adds this safe default for both `start` and `hf`:
+
+```text
+read_file,file_glob_search,grep_search,get_datetime
+```
+
+Opt out entirely by setting:
+
+```bash
+LLAMA_ENABLE_TOOLS=0 ./llama-models.sh start 1
+```
+
+Opt in to all built-in tools by setting:
+
+```bash
+LLAMA_DEFAULT_TOOLS=all ./llama-models.sh start 1
+```
+
 If a matching `mmproj` file is next to the resolved model, `start` adds it automatically.
 If you already pass `--mmproj`, the script leaves it alone.
 
@@ -152,6 +171,8 @@ Example: if only `Q4_K_M` is cached, querying `Q5_K_M gemma 4` will pick that `Q
 
 - `LLAMA_SERVER_CMD` (default: `llama-server`)
 - `NGL_DEFAULT` (default: `99`)
+- `LLAMA_ENABLE_TOOLS` (default: `1`; set `0`, `false`, `no`, or `off` to opt out)
+- `LLAMA_DEFAULT_TOOLS` (default: `read_file,file_glob_search,grep_search,get_datetime`; set `all` to opt in to all tools)
 - `LLAMA_AUTO_MMPROJ` (default: `1`)
 - `HF_HUB_CACHE` (explicit HF hub cache path)
 - `HF_HOME` (uses `$HF_HOME/hub`)

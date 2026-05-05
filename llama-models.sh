@@ -31,6 +31,8 @@ SCRIPT_PATH="$(resolve_physical_path "${BASH_SOURCE[0]}")"
 LLAMA_SERVER_CMD="${LLAMA_SERVER_CMD:-llama-server}"
 NGL_DEFAULT="${NGL_DEFAULT:-99}"
 LLAMA_AUTO_MMPROJ="${LLAMA_AUTO_MMPROJ:-1}"
+LLAMA_ENABLE_TOOLS="${LLAMA_ENABLE_TOOLS:-1}"
+LLAMA_DEFAULT_TOOLS="${LLAMA_DEFAULT_TOOLS:-read_file,file_glob_search,grep_search,get_datetime}"
 
 if [[ -n "${HF_HUB_CACHE:-}" ]]; then
   HF_CACHE_ROOT="$HF_HUB_CACHE"
@@ -68,6 +70,8 @@ Examples:
   $SCRIPT_NAME start 1
   $SCRIPT_NAME start gemma-4-E4B-it-Q4_K_M
   $SCRIPT_NAME start ~/models/mistral.gguf --port 8080
+  LLAMA_ENABLE_TOOLS=0 $SCRIPT_NAME start 1
+  LLAMA_DEFAULT_TOOLS=all $SCRIPT_NAME start 1
   $SCRIPT_NAME remove 1
   $SCRIPT_NAME hf ggml-org/gemma-4-e4b-it-GGUF --port 8080
   $SCRIPT_NAME install
@@ -77,6 +81,11 @@ Examples:
 Config (optional env vars):
   LLAMA_SERVER_CMD  Command to run llama server (default: llama-server)
   NGL_DEFAULT       Default value for -ngl (default: 99)
+  LLAMA_ENABLE_TOOLS
+                    Enable default tools; set to 0/false/no/off to opt out
+  LLAMA_DEFAULT_TOOLS
+                    Default --tools value (default: read_file,file_glob_search,
+                    grep_search,get_datetime; set to all to opt in to all tools)
   HF_HUB_CACHE      Hugging Face hub cache directory
   HF_HOME           Hugging Face home directory (uses \$HF_HOME/hub)
 EOF
@@ -252,6 +261,17 @@ autoload_mmproj_enabled() {
   esac
 }
 
+tools_enabled() {
+  case "$LLAMA_ENABLE_TOOLS" in
+    0|false|no|off)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 has_mmproj_arg() {
   local arg
 
@@ -264,6 +284,24 @@ has_mmproj_arg() {
   done
 
   return 1
+}
+
+has_tools_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --tools|--tools=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+default_tools_value() {
+  printf "%s\n" "$LLAMA_DEFAULT_TOOLS"
 }
 
 find_mmproj_for_model() {
@@ -523,6 +561,9 @@ cmd_start() {
   model_path="$(resolve_model "$model_ref")"
 
   local -a server_args=("-m" "$model_path" "-ngl" "$NGL_DEFAULT")
+  if tools_enabled && ! has_tools_arg "$@"; then
+    server_args+=("--tools" "$(default_tools_value)")
+  fi
   if autoload_mmproj_enabled && ! has_mmproj_arg "$@"; then
     local mmproj_path
     if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
@@ -594,8 +635,16 @@ cmd_hf() {
   local repo_id="$1"
   shift
 
-  echo "Running: $LLAMA_SERVER_CMD -hf \"$repo_id\" -ngl $NGL_DEFAULT $*"
-  "$LLAMA_SERVER_CMD" -hf "$repo_id" -ngl "$NGL_DEFAULT" "$@"
+  local -a server_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
+  if tools_enabled && ! has_tools_arg "$@"; then
+    server_args+=("--tools" "$(default_tools_value)")
+  fi
+  if [[ $# -gt 0 ]]; then
+    server_args+=("$@")
+  fi
+
+  echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"
+  "$LLAMA_SERVER_CMD" "${server_args[@]}"
 }
 
 cmd_install() {
