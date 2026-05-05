@@ -2,6 +2,32 @@
 set -euo pipefail
 
 SCRIPT_NAME="$(basename "$0")"
+
+resolve_physical_path() {
+  local path="$1"
+  local link_target dir
+
+  path="${path/#\~/$HOME}"
+
+  if [[ "$path" != /* ]]; then
+    path="$PWD/$path"
+  fi
+
+  while [[ -L "$path" ]]; do
+    link_target="$(readlink "$path")"
+    if [[ "$link_target" == /* ]]; then
+      path="$link_target"
+    else
+      dir="$(cd -- "$(dirname -- "$path")" && pwd -P)"
+      path="$dir/$link_target"
+    fi
+  done
+
+  dir="$(cd -- "$(dirname -- "$path")" && pwd -P)"
+  printf "%s/%s\n" "$dir" "$(basename -- "$path")"
+}
+
+SCRIPT_PATH="$(resolve_physical_path "${BASH_SOURCE[0]}")"
 LLAMA_SERVER_CMD="${LLAMA_SERVER_CMD:-llama-server}"
 NGL_DEFAULT="${NGL_DEFAULT:-99}"
 LLAMA_AUTO_MMPROJ="${LLAMA_AUTO_MMPROJ:-1}"
@@ -23,6 +49,8 @@ Usage:
   $SCRIPT_NAME start <index|query|/path/to/model.gguf> [llama-server args...]
   $SCRIPT_NAME remove <index|query|/path/to/model.gguf>
   $SCRIPT_NAME hf <repo-id> [llama-server args...]
+  $SCRIPT_NAME install [target-link-path]
+  $SCRIPT_NAME uninstall [target-link-path]
   $SCRIPT_NAME help
 
 Commands:
@@ -30,6 +58,9 @@ Commands:
   start   Start llama-server with a local GGUF model and -ngl $NGL_DEFAULT.
   remove  Preview and remove a local GGUF model plus safe associated files.
   hf      Start llama-server directly from a Hugging Face repo via -hf.
+  install Create a symlink to this script after confirming the target path.
+  uninstall
+          Remove the symlink created by install after confirming it points here.
   help    Show this help.
 
 Examples:
@@ -39,6 +70,9 @@ Examples:
   $SCRIPT_NAME start ~/models/mistral.gguf --port 8080
   $SCRIPT_NAME remove 1
   $SCRIPT_NAME hf ggml-org/gemma-4-e4b-it-GGUF --port 8080
+  $SCRIPT_NAME install
+  $SCRIPT_NAME install ~/bin/llama-models
+  $SCRIPT_NAME uninstall
 
 Config (optional env vars):
   LLAMA_SERVER_CMD  Command to run llama server (default: llama-server)
@@ -53,6 +87,105 @@ require_command() {
     echo "Error: required command not found: $1" >&2
     exit 1
   fi
+}
+
+default_install_target() {
+  printf "%s\n" "$HOME/llama-models.sh"
+}
+
+resolve_target_path() {
+  local input="${1:-$(default_install_target)}"
+
+  input="${input/#\~/$HOME}"
+
+  if [[ "$input" != /* ]]; then
+    printf "%s\n" "$PWD/$input"
+    return
+  fi
+
+  printf "%s\n" "$input"
+}
+
+confirm_action() {
+  local prompt="$1"
+  local response
+
+  printf "%s [y/N] " "$prompt"
+  if ! IFS= read -r response < /dev/tty; then
+    printf "\nAborted.\n" >&2
+    return 1
+  fi
+
+  case "$response" in
+    y|Y|yes|YES)
+      return 0
+      ;;
+    *)
+      echo "Aborted." >&2
+      return 1
+      ;;
+  esac
+}
+
+is_windows_environment() {
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      return 0
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+to_native_path() {
+  local path="$1"
+
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -w "$path"
+    return
+  fi
+
+  printf "%s\n" "$path"
+}
+
+create_symlink() {
+  local source_path="$1"
+  local target_path="$2"
+
+  if is_windows_environment; then
+    local source_native target_native
+
+    source_native="$(to_native_path "$source_path")"
+    target_native="$(to_native_path "$target_path")"
+
+    if command -v powershell.exe >/dev/null 2>&1; then
+      powershell.exe -NoProfile -NonInteractive -Command '& { param([string]$LinkPath, [string]$TargetPath) $ErrorActionPreference = "Stop"; New-Item -ItemType SymbolicLink -Path $LinkPath -Target $TargetPath | Out-Null }' "$target_native" "$source_native"
+      return $?
+    fi
+
+    if command -v cmd.exe >/dev/null 2>&1; then
+      cmd.exe //c mklink "$target_native" "$source_native" > /dev/null
+      return $?
+    fi
+
+    return 1
+  fi
+
+  ln -s "$source_path" "$target_path"
+}
+
+link_points_to_source() {
+  local target_path="$1"
+  local source_path="$2"
+  local resolved_target
+
+  if [[ ! -L "$target_path" ]]; then
+    return 1
+  fi
+
+  resolved_target="$(resolve_physical_path "$target_path")"
+  [[ "$resolved_target" == "$source_path" ]]
 }
 
 normalize_for_search() {
@@ -465,6 +598,119 @@ cmd_hf() {
   "$LLAMA_SERVER_CMD" -hf "$repo_id" -ngl "$NGL_DEFAULT" "$@"
 }
 
+cmd_install() {
+  if [[ $# -gt 1 ]]; then
+    echo "Error: install accepts at most one [target-link-path] argument" >&2
+    print_help
+    exit 1
+  fi
+
+  local source_path="$SCRIPT_PATH"
+  local target_path target_dir existing_link
+
+  target_path="$(resolve_target_path "${1:-}")"
+
+  echo "Install source:"
+  echo "  $source_path"
+  echo "Install target:"
+  echo "  $target_path"
+
+  if [[ -L "$target_path" ]]; then
+    existing_link="$(readlink "$target_path")"
+    if link_points_to_source "$target_path" "$source_path"; then
+      echo "Already installed: $target_path -> $existing_link"
+      return 0
+    fi
+
+    echo "Target already exists as a symlink:"
+    echo "  $target_path -> $existing_link"
+    if ! confirm_action "Replace this existing symlink?"; then
+      return 1
+    fi
+  elif [[ -e "$target_path" ]]; then
+    if [[ -d "$target_path" ]]; then
+      echo "Error: target exists and is a directory: $target_path" >&2
+      return 1
+    fi
+
+    echo "Target already exists and is not a symlink:"
+    echo "  $target_path"
+    if ! confirm_action "Replace this existing file?"; then
+      return 1
+    fi
+  else
+    if ! confirm_action "Create this symlink?"; then
+      return 1
+    fi
+  fi
+
+  target_dir="$(dirname "$target_path")"
+  if [[ ! -d "$target_dir" ]]; then
+    echo "Creating parent directory: $target_dir"
+    mkdir -p "$target_dir"
+  fi
+
+  if [[ -L "$target_path" || -f "$target_path" ]]; then
+    rm -f -- "$target_path"
+  fi
+
+  if create_symlink "$source_path" "$target_path"; then
+    echo "Installed: $target_path -> $source_path"
+    return 0
+  fi
+
+  echo "Error: failed to create symlink: $target_path" >&2
+  if is_windows_environment; then
+    cat >&2 <<EOF
+Windows note: symlink creation from bash may require Developer Mode or an elevated shell.
+If you are using Git Bash or MSYS2, enable Developer Mode in Windows Settings or rerun from an elevated terminal.
+EOF
+  fi
+
+  return 1
+}
+
+cmd_uninstall() {
+  if [[ $# -gt 1 ]]; then
+    echo "Error: uninstall accepts at most one [target-link-path] argument" >&2
+    print_help
+    exit 1
+  fi
+
+  local source_path="$SCRIPT_PATH"
+  local target_path existing_link
+
+  target_path="$(resolve_target_path "${1:-}")"
+
+  echo "Uninstall target:"
+  echo "  $target_path"
+
+  if [[ ! -e "$target_path" && ! -L "$target_path" ]]; then
+    echo "Nothing to remove."
+    return 0
+  fi
+
+  if [[ ! -L "$target_path" ]]; then
+    echo "Error: target exists but is not a symlink. Refusing to remove: $target_path" >&2
+    return 1
+  fi
+
+  existing_link="$(readlink "$target_path")"
+  if ! link_points_to_source "$target_path" "$source_path"; then
+    echo "Error: target symlink does not point to this script. Refusing to remove." >&2
+    echo "  current: $existing_link" >&2
+    echo "  expected: $source_path" >&2
+    return 1
+  fi
+
+  if ! confirm_action "Remove this symlink?"; then
+    return 1
+  fi
+
+  rm -f -- "$target_path"
+  echo "Removed: $target_path"
+}
+
 main() {
   local cmd="${1:-help}"
 
@@ -484,6 +730,14 @@ main() {
     hf)
       shift
       cmd_hf "$@"
+      ;;
+    install)
+      shift
+      cmd_install "$@"
+      ;;
+    uninstall)
+      shift
+      cmd_uninstall "$@"
       ;;
     help|-h|--help)
       print_help
