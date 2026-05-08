@@ -358,13 +358,48 @@ find_mmproj_for_model() {
   return 1
 }
 
+mmproj_is_shared() {
+  local mmproj_path="$1"
+  local model_path="$2"
+  local model_dir sibling_path sibling_mmproj_path
+  local resolved_mmproj resolved_sibling_mmproj
+
+  model_dir="$(dirname "$model_path")"
+  resolved_mmproj="$(resolve_physical_path "$mmproj_path")"
+
+  while IFS= read -r sibling_path; do
+    if [[ "$sibling_path" == "$model_path" ]]; then
+      continue
+    fi
+
+    if ! sibling_mmproj_path="$(find_mmproj_for_model "$sibling_path" 2>/dev/null)"; then
+      continue
+    fi
+
+    resolved_sibling_mmproj="$(resolve_physical_path "$sibling_mmproj_path")"
+    if [[ "$resolved_sibling_mmproj" == "$resolved_mmproj" ]]; then
+      return 0
+    fi
+  done < <(
+    find "$model_dir" -maxdepth 1 \( -type f -o -type l \) \
+      \( -name '*.gguf' -o -name '*.GGUF' \) \
+      ! -iname '*mmproj*' 2>/dev/null | sort
+  )
+
+  return 1
+}
+
 collect_removal_targets() {
   local model_path="$1"
   local -a targets=("$model_path")
   local mmproj_path
 
   if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
-    targets+=("$mmproj_path")
+    if mmproj_is_shared "$mmproj_path" "$model_path"; then
+      echo "Info: mmproj is shared with other model(s), keeping: $mmproj_path" >&2
+    else
+      targets+=("$mmproj_path")
+    fi
   fi
 
   printf "%s\n" "${targets[@]}"
@@ -799,4 +834,6 @@ main() {
   esac
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
