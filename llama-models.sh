@@ -31,6 +31,7 @@ SCRIPT_PATH="$(resolve_physical_path "${BASH_SOURCE[0]}")"
 LLAMA_SERVER_CMD="${LLAMA_SERVER_CMD:-llama-server}"
 NGL_DEFAULT="${NGL_DEFAULT:-99}"
 LLAMA_AUTO_MMPROJ="${LLAMA_AUTO_MMPROJ:-1}"
+LLAMA_AUTO_JINJA="${LLAMA_AUTO_JINJA:-1}"
 LLAMA_ENABLE_TOOLS="${LLAMA_ENABLE_TOOLS:-1}"
 LLAMA_DEFAULT_TOOLS="${LLAMA_DEFAULT_TOOLS:-read_file,file_glob_search,grep_search,get_datetime}"
 
@@ -57,9 +58,11 @@ Usage:
 
 Commands:
   list    List downloaded GGUF models from Hugging Face cache.
-  start   Start llama-server with a local GGUF model and -ngl $NGL_DEFAULT.
+  start   Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
+    and --jinja by default.
   remove  Preview and remove a local GGUF model plus safe associated files.
-  hf      Start llama-server directly from a Hugging Face repo via -hf.
+  hf      Start llama-server directly from a Hugging Face repo via -hf
+    and --jinja by default.
   install Create a symlink to this script after confirming the target path.
   uninstall
           Remove the symlink created by install after confirming it points here.
@@ -81,6 +84,7 @@ Examples:
 Config (optional env vars):
   LLAMA_SERVER_CMD  Command to run llama server (default: llama-server)
   NGL_DEFAULT       Default value for -ngl (default: 99)
+  LLAMA_AUTO_JINJA  Add --jinja by default; set to 0/false/no/off to opt out
   LLAMA_ENABLE_TOOLS
                     Enable default tools; set to 0/false/no/off to opt out
   LLAMA_DEFAULT_TOOLS
@@ -272,6 +276,17 @@ tools_enabled() {
   esac
 }
 
+autoload_jinja_enabled() {
+  case "$LLAMA_AUTO_JINJA" in
+    0|false|no|off)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 has_mmproj_arg() {
   local arg
 
@@ -292,6 +307,20 @@ has_tools_arg() {
   for arg in "$@"; do
     case "$arg" in
       --tools|--tools=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_jinja_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --jinja)
         return 0
         ;;
     esac
@@ -596,6 +625,9 @@ cmd_start() {
   model_path="$(resolve_model "$model_ref")"
 
   local -a server_args=("-m" "$model_path" "-ngl" "$NGL_DEFAULT")
+  if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
+    server_args+=("--jinja")
+  fi
   if tools_enabled && ! has_tools_arg "$@"; then
     server_args+=("--tools" "$(default_tools_value)")
   fi
@@ -671,6 +703,9 @@ cmd_hf() {
   shift
 
   local -a server_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
+  if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
+    server_args+=("--jinja")
+  fi
   if tools_enabled && ! has_tools_arg "$@"; then
     server_args+=("--tools" "$(default_tools_value)")
   fi
