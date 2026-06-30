@@ -5,9 +5,8 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 ## What it does
 
 - Lists locally cached Hugging Face GGUF models
-- Starts a local GGUF model with `-ngl 99` by default
-- Starts directly from Hugging Face via `-hf`
-- Adds `--jinja` by default for `start` and `hf`
+- Starts a local GGUF model with `-ngl 99`, `--jinja`, `-ctk q8_0`, `-ctv q4_1`, `-np 1`, and `-fa on` by default
+- Starts directly from Hugging Face via `-hf` with the same default flags
 - Enables a safe built-in tool subset by default
 - Auto-loads a sibling `mmproj` file for `start` when one is found
 - Can preview and remove a cached model with a confirmation prompt
@@ -100,7 +99,13 @@ Pass extra `llama-server` args:
 ./llama-models.sh start 1 --port 8080 --ctx-size 8192
 ```
 
-The wrapper adds `--jinja` automatically for both `start` and `hf` unless you already pass it yourself.
+The wrapper fills in these defaults for both `start` and `hf` unless you already pass the corresponding flags yourself:
+
+```text
+--jinja, -ctk q8_0, -ctv q4_1, -np 1, -fa on
+```
+
+Manual overrides win, so explicit args such as `--cache-type-k q4_0`, `--cache-type-v q4_0`, `--parallel 2`, or `--flash-attn off` are left untouched.
 
 You can disable that default with:
 
@@ -183,6 +188,10 @@ Example: if only `Q4_K_M` is cached, querying `Q5_K_M gemma 4` will pick that `Q
 - `LLAMA_AUTO_JINJA` (default: `1`; set `0`, `false`, `no`, or `off` to opt out)
 - `LLAMA_ENABLE_TOOLS` (default: `1`; set `0`, `false`, `no`, or `off` to opt out)
 - `LLAMA_DEFAULT_TOOLS` (default: `read_file,file_glob_search,grep_search,get_datetime`; set `all` to opt in to all tools)
+- `LLAMA_DEFAULT_CTK` (default: `q8_0`)
+- `LLAMA_DEFAULT_CTV` (default: `q4_1`)
+- `LLAMA_DEFAULT_NP` (default: `1`)
+- `LLAMA_DEFAULT_FA` (default: `on`)
 - `LLAMA_AUTO_MMPROJ` (default: `1`)
 - `HF_HUB_CACHE` (explicit HF hub cache path)
 - `HF_HOME` (uses `$HF_HOME/hub`)

@@ -34,6 +34,10 @@ LLAMA_AUTO_MMPROJ="${LLAMA_AUTO_MMPROJ:-1}"
 LLAMA_AUTO_JINJA="${LLAMA_AUTO_JINJA:-1}"
 LLAMA_ENABLE_TOOLS="${LLAMA_ENABLE_TOOLS:-1}"
 LLAMA_DEFAULT_TOOLS="${LLAMA_DEFAULT_TOOLS:-read_file,file_glob_search,grep_search,get_datetime}"
+LLAMA_DEFAULT_CTK="${LLAMA_DEFAULT_CTK:-q8_0}"
+LLAMA_DEFAULT_CTV="${LLAMA_DEFAULT_CTV:-q4_1}"
+LLAMA_DEFAULT_NP="${LLAMA_DEFAULT_NP:-1}"
+LLAMA_DEFAULT_FA="${LLAMA_DEFAULT_FA:-on}"
 
 if [[ -n "${HF_HUB_CACHE:-}" ]]; then
   HF_CACHE_ROOT="$HF_HUB_CACHE"
@@ -59,10 +63,12 @@ Usage:
 Commands:
   list    List downloaded GGUF models from Hugging Face cache.
   start   Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
-    and --jinja by default.
+    --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV,
+    -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
   remove  Preview and remove a local GGUF model plus safe associated files.
   hf      Start llama-server directly from a Hugging Face repo via -hf
-    and --jinja by default.
+    with -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV,
+    -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
   install Create a symlink to this script after confirming the target path.
   uninstall
           Remove the symlink created by install after confirming it points here.
@@ -90,6 +96,10 @@ Config (optional env vars):
   LLAMA_DEFAULT_TOOLS
                     Default --tools value (default: read_file,file_glob_search,
                     grep_search,get_datetime; set to all to opt in to all tools)
+  LLAMA_DEFAULT_CTK Default value for -ctk (default: q8_0)
+  LLAMA_DEFAULT_CTV Default value for -ctv (default: q4_1)
+  LLAMA_DEFAULT_NP  Default value for -np (default: 1)
+  LLAMA_DEFAULT_FA  Default value for -fa (default: on)
   HF_HUB_CACHE      Hugging Face hub cache directory
   HF_HOME           Hugging Face home directory (uses \$HF_HOME/hub)
 EOF
@@ -321,6 +331,62 @@ has_jinja_arg() {
   for arg in "$@"; do
     case "$arg" in
       --jinja)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_ctk_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      -ctk|--cache-type-k|--cache-type-k=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_ctv_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      -ctv|--cache-type-v|--cache-type-v=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_np_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      -np|--parallel|--parallel=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_fa_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      -fa|--flash-attn|--flash-attn=*)
         return 0
         ;;
     esac
@@ -637,6 +703,18 @@ cmd_start() {
       server_args+=("--mmproj" "$mmproj_path")
     fi
   fi
+  if ! has_ctk_arg "$@"; then
+    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
+  fi
+  if ! has_ctv_arg "$@"; then
+    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
+  fi
+  if ! has_np_arg "$@"; then
+    server_args+=("-np" "$LLAMA_DEFAULT_NP")
+  fi
+  if ! has_fa_arg "$@"; then
+    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
+  fi
 
   if [[ $# -gt 0 ]]; then
     server_args+=("$@")
@@ -708,6 +786,18 @@ cmd_hf() {
   fi
   if tools_enabled && ! has_tools_arg "$@"; then
     server_args+=("--tools" "$(default_tools_value)")
+  fi
+  if ! has_ctk_arg "$@"; then
+    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
+  fi
+  if ! has_ctv_arg "$@"; then
+    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
+  fi
+  if ! has_np_arg "$@"; then
+    server_args+=("-np" "$LLAMA_DEFAULT_NP")
+  fi
+  if ! has_fa_arg "$@"; then
+    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
   fi
   if [[ $# -gt 0 ]]; then
     server_args+=("$@")
