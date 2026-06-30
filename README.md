@@ -4,7 +4,7 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 
 ## What it does
 
-- Lists locally cached Hugging Face GGUF models
+- Lists locally cached Hugging Face GGUF models in a compact repo-and-filename view by default
 - Starts a local GGUF model with `-ngl 99`, `--jinja`, `-ctk q8_0`, `-ctv q4_1`, `-np 1`, and `-fa on` by default
 - Starts directly from Hugging Face via `-hf` with the same default flags
 - Enables a safe built-in tool subset by default
@@ -67,6 +67,16 @@ List downloaded models:
 
 ```bash
 ./llama-models.sh list
+```
+
+This prints a compact table with the list index, repo, and filename.
+
+Print full cached file paths as well:
+
+```bash
+./llama-models.sh list --paths
+# or
+./llama-models.sh list -p
 ```
 
 Start by index from list:
