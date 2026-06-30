@@ -48,7 +48,7 @@ declare -a MODELS=()
 print_help() {
   cat <<EOF
 Usage:
-  $SCRIPT_NAME list
+  $SCRIPT_NAME list [--paths, -p]
   $SCRIPT_NAME start <index|query|/path/to/model.gguf> [llama-server args...]
   $SCRIPT_NAME remove <index|query|/path/to/model.gguf>
   $SCRIPT_NAME hf <repo-id> [llama-server args...]
