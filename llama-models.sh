@@ -61,18 +61,15 @@ Usage:
   $SCRIPT_NAME help
 
 Commands:
-  list    List downloaded GGUF models from Hugging Face cache.
-  start   Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
-    --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV,
-    -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
-  remove  Preview and remove a local GGUF model plus safe associated files.
-  hf      Start llama-server directly from a Hugging Face repo via -hf
-    with -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV,
-    -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
-  install Create a symlink to this script after confirming the target path.
-  uninstall
-          Remove the symlink created by install after confirming it points here.
-  help    Show this help.
+  list        List downloaded GGUF models from Hugging Face cache.
+  start       Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
+              --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
+  remove      Preview and remove a local GGUF model plus safe associated files.
+  hf          Start llama-server directly from a Hugging Face repo via -hf
+              with -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
+  install     Create a symlink to this script after confirming the target path.
+  uninstall   Remove the symlink created by install after confirming it points here.
+  help        Show this help.
 
 Examples:
   $SCRIPT_NAME list
