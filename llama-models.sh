@@ -48,7 +48,7 @@ declare -a MODELS=()
 print_help() {
   cat <<EOF
 Usage:
-  $SCRIPT_NAME list
+  $SCRIPT_NAME list [--paths, -p]
   $SCRIPT_NAME start <index|query|/path/to/model.gguf> [llama-server args...]
   $SCRIPT_NAME remove <index|query|/path/to/model.gguf>
   $SCRIPT_NAME hf <repo-id> [llama-server args...]
@@ -58,6 +58,7 @@ Usage:
 
 Commands:
   list    List downloaded GGUF models from Hugging Face cache.
+          Pass --paths (or -p) to also print each model's full path.
   start   Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
     and --jinja by default.
   remove  Preview and remove a local GGUF model plus safe associated files.
@@ -70,6 +71,7 @@ Commands:
 
 Examples:
   $SCRIPT_NAME list
+  $SCRIPT_NAME list --paths
   $SCRIPT_NAME start 1
   $SCRIPT_NAME start gemma-4-E4B-it-Q4_K_M
   $SCRIPT_NAME start ~/models/mistral.gguf --port 8080
@@ -491,16 +493,46 @@ collect_models() {
 print_model_line() {
   local idx="$1"
   local model_path="$2"
+  local show_path="${3:-0}"
   local repo file
 
   repo="$(model_repo_from_path "$model_path")"
   file="$(basename "$model_path")"
 
   printf "%3s | %s | %s\n" "$idx" "$repo" "$file"
-  printf "      %s\n" "$model_path"
+  if [[ "$show_path" == "1" ]]; then
+    printf "      %s\n" "$model_path"
+  fi
 }
 
 cmd_list() {
+  local show_paths=0
+  local arg
+
+  while [[ $# -gt 0 ]]; do
+    arg="$1"
+    case "$arg" in
+      --paths|-p)
+        show_paths=1
+        shift
+        ;;
+      --)
+        shift
+        break
+        ;;
+      *)
+        echo "Error: list does not accept argument: $arg" >&2
+        echo "Usage: $SCRIPT_NAME list [--paths]" >&2
+        return 1
+        ;;
+    esac
+  done
+
+  if [[ $# -gt 0 ]]; then
+    echo "Error: list does not accept positional arguments: $*" >&2
+    echo "Usage: $SCRIPT_NAME list [--paths]" >&2
+    return 1
+  fi
   collect_models
 
   if [[ ${#MODELS[@]} -eq 0 ]]; then
@@ -519,7 +551,7 @@ EOF
   local i idx
   for i in "${!MODELS[@]}"; do
     idx=$((i + 1))
-    print_model_line "$idx" "${MODELS[$i]}"
+    print_model_line "$idx" "${MODELS[$i]}" "$show_paths"
   done
 }
 
