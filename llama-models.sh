@@ -512,7 +512,7 @@ cmd_list() {
   while [[ $# -gt 0 ]]; do
     arg="$1"
     case "$arg" in
-      --paths|-p|--verbose|-v)
+      --paths|-p)
         show_paths=1
         shift
         ;;
@@ -528,6 +528,11 @@ cmd_list() {
     esac
   done
 
+  if [[ $# -gt 0 ]]; then
+    echo "Error: list does not accept positional arguments: $*" >&2
+    echo "Usage: $SCRIPT_NAME list [--paths]" >&2
+    return 1
+  fi
   collect_models
 
   if [[ ${#MODELS[@]} -eq 0 ]]; then
