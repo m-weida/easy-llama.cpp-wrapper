@@ -10,6 +10,8 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 - Enables a safe built-in tool subset by default
 - Auto-loads a sibling `mmproj` file for `start` when one is found
 - Can preview and remove a cached model with a confirmation prompt
+- Checks cached Hugging Face repos for newer commits and reports available updates
+- Can clean old cached files before re-downloading a repo
 
 Script: `./llama-models.sh`
 
@@ -156,6 +158,44 @@ Start directly from HF repo:
 
 ```bash
 ./llama-models.sh hf ggml-org/gemma-4-e4b-it-GGUF --port 8080
+```
+
+## Check for updates
+
+Check whether any cached repos have newer commits on their default branch:
+
+```bash
+./llama-models.sh check-updates
+```
+
+This prints each repo, its current cached commit, the latest remote commit, and the cached GGUF files for that repo. Different quantizations are listed separately.
+
+## Update a cached repo
+
+To re-run `llama-server -hf` for a repo and fetch the latest version:
+
+```bash
+./llama-models.sh update 1
+# or by repo id
+./llama-models.sh update unsloth/gemma-4-12B-it-qat-GGUF
+```
+
+By default this does **not** delete your old cached files — it relies on the Hugging Face cache to add a new snapshot and reuse unchanged blobs.
+
+To delete the old cached files for that repo first, pass `--clean`:
+
+```bash
+./llama-models.sh update --clean 1
+./llama-models.sh update --clean unsloth/gemma-4-12B-it-qat-GGUF
+```
+
+The `--clean` mode lists the files it will remove and asks for confirmation before deleting anything.
+
+Extra `llama-server` args work with both forms:
+
+```bash
+./llama-models.sh update 1 --port 8080
+./llama-models.sh update --clean unsloth/gemma-4-12B-it-qat-GGUF --ctx-size 8192
 ```
 
 ## Quantization selection

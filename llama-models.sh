@@ -56,21 +56,27 @@ Usage:
   $SCRIPT_NAME start <index|query|/path/to/model.gguf> [llama-server args...]
   $SCRIPT_NAME remove <index|query|/path/to/model.gguf>
   $SCRIPT_NAME hf <repo-id> [llama-server args...]
+  $SCRIPT_NAME check-updates
+  $SCRIPT_NAME update [--clean] <index|query|repo-id> [llama-server args...]
   $SCRIPT_NAME install [target-link-path]
   $SCRIPT_NAME uninstall [target-link-path]
   $SCRIPT_NAME help
 
 Commands:
-  list        List downloaded GGUF models from Hugging Face cache.
-              Pass --paths (or -p) to also print each model's full path.
-  start       Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
-              --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
-  remove      Preview and remove a local GGUF model plus safe associated files.
-  hf          Start llama-server directly from a Hugging Face repo via -hf
-              with -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
-  install     Create a symlink to this script after confirming the target path.
-  uninstall   Remove the symlink created by install after confirming it points here.
-  help        Show this help.
+  list           List downloaded GGUF models from Hugging Face cache.
+                 Pass --paths (or -p) to also print each model's full path.
+  start          Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
+                 --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
+  remove         Preview and remove a local GGUF model plus safe associated files.
+  hf             Start llama-server directly from a Hugging Face repo via -hf
+                 with -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
+  check-updates  Check cached Hugging Face repos for newer commits on the
+                 default branch and report which models have updates.
+  update         Re-run llama-server -hf for a repo to fetch the latest version.
+                 Pass --clean to delete the old cached files first.
+  install        Create a symlink to this script after confirming the target path.
+  uninstall      Remove the symlink created by install after confirming it points here.
+  help           Show this help.
 
 Examples:
   $SCRIPT_NAME list
@@ -82,6 +88,10 @@ Examples:
   LLAMA_DEFAULT_TOOLS=all $SCRIPT_NAME start 1
   $SCRIPT_NAME remove 1
   $SCRIPT_NAME hf ggml-org/gemma-4-e4b-it-GGUF --port 8080
+  $SCRIPT_NAME check-updates
+  $SCRIPT_NAME update 1
+  $SCRIPT_NAME update unsloth/gemma-4-12B-it-qat-GGUF
+  $SCRIPT_NAME update --clean 1
   $SCRIPT_NAME install
   $SCRIPT_NAME install ~/bin/llama-models
   $SCRIPT_NAME uninstall
@@ -396,6 +406,25 @@ has_fa_arg() {
 
 default_tools_value() {
   printf "%s\n" "$LLAMA_DEFAULT_TOOLS"
+}
+
+fetch_latest_sha() {
+  local repo_id="$1"
+  local api_url="https://huggingface.co/api/models/$repo_id"
+  local response
+
+  response="$(curl -s --max-time 30 "$api_url" 2>/dev/null)"
+  if [[ -z "$response" ]]; then
+    return 1
+  fi
+
+  if command -v jq >/dev/null 2>&1; then
+    printf "%s" "$response" | jq -r '.sha // empty'
+    return
+  fi
+
+  # Fallback: extract the top-level sha from a flat JSON object.
+  printf "%s" "$response" | sed -n 's/^[[:space:]]*{[^{}]*"sha"[[:space:]]*:[[:space:]]*"\([^"]*\)"[^{}]*}.*/\1/p'
 }
 
 find_mmproj_for_model() {
@@ -836,6 +865,214 @@ cmd_hf() {
   "$LLAMA_SERVER_CMD" "${server_args[@]}"
 }
 
+cmd_check_updates() {
+  if [[ $# -gt 0 ]]; then
+    echo "Error: check-updates does not accept arguments" >&2
+    echo "Usage: $SCRIPT_NAME check-updates" >&2
+    return 1
+  fi
+
+  require_command curl
+  collect_models
+
+  if [[ ${#MODELS[@]} -eq 0 ]]; then
+    cat <<EOF
+No GGUF files found in Hugging Face cache:
+  $HF_CACHE_ROOT
+EOF
+    return 0
+  fi
+
+  declare -A repo_current_commit
+  declare -A repo_files
+  local path repo commit
+
+  for path in "${MODELS[@]}"; do
+    repo="$(model_repo_from_path "$path")"
+    if [[ "$repo" == "unknown/unknown" ]]; then
+      continue
+    fi
+
+    commit="${path#*/snapshots/}"
+    commit="${commit%%/*}"
+
+    repo_current_commit["$repo"]="$commit"
+    if [[ -z "${repo_files[$repo]:-}" ]]; then
+      repo_files["$repo"]="$path"
+    else
+      repo_files["$repo"]="${repo_files[$repo]}"$'\n'"$path"
+    fi
+  done
+
+  if [[ ${#repo_current_commit[@]} -eq 0 ]]; then
+    echo "No Hugging Face models found to check."
+    return 0
+  fi
+
+  echo "Checking ${#repo_current_commit[@]} repo(s) for updates..."
+  echo
+
+  local current_commit latest_commit file repo
+  while IFS= read -r repo; do
+    current_commit="${repo_current_commit[$repo]}"
+    latest_commit="$(fetch_latest_sha "$repo")"
+
+    if [[ -z "$latest_commit" ]]; then
+      printf "%s | unable to check (network error, repo not found, or private)\n" "$repo"
+      continue
+    fi
+
+    if [[ "$current_commit" == "$latest_commit" ]]; then
+      printf "%s | up to date (%s)\n" "$repo" "$current_commit"
+    else
+      printf "%s | update available\n" "$repo"
+      printf "  current: %s\n" "$current_commit"
+      printf "  latest:  %s\n" "$latest_commit"
+    fi
+
+    while IFS= read -r file; do
+      [[ -n "$file" ]] && printf "  - %s\n" "$(basename "$file")"
+    done <<< "${repo_files[$repo]}"
+  done < <(printf "%s\n" "${!repo_current_commit[@]}" | sort)
+}
+
+cmd_update() {
+  if [[ $# -lt 1 ]]; then
+    echo "Error: update requires [--clean] <index|query|repo-id>" >&2
+    print_help
+    return 1
+  fi
+
+  require_command "$LLAMA_SERVER_CMD"
+
+  local clean=0
+  local -a args=()
+  local seen_double_dash=0
+
+  while [[ $# -gt 0 ]]; do
+    case "$1" in
+      --clean)
+        if [[ "$seen_double_dash" == "0" ]]; then
+          clean=1
+        else
+          args+=("$1")
+        fi
+        shift
+        ;;
+      --)
+        seen_double_dash=1
+        shift
+        args+=("$@")
+        break
+        ;;
+      *)
+        args+=("$1")
+        shift
+        ;;
+    esac
+  done
+
+  if [[ ${#args[@]} -lt 1 ]]; then
+    echo "Error: update requires <index|query|repo-id>" >&2
+    print_help
+    return 1
+  fi
+
+  local model_ref="${args[0]}"
+  local -a user_server_args=("${args[@]:1}")
+
+  if [[ "$model_ref" == *.gguf || "$model_ref" == *.GGUF ]]; then
+    echo "Error: update does not accept file paths; use a repo id, index, or query" >&2
+    return 1
+  fi
+
+  local model_path
+  if [[ "$model_ref" == */* ]]; then
+    model_path=""
+  else
+    model_path="$(resolve_model "$model_ref")"
+  fi
+
+  local repo_id
+  if [[ -n "$model_path" ]]; then
+    repo_id="$(model_repo_from_path "$model_path")"
+  else
+    repo_id="$model_ref"
+  fi
+
+  if [[ "$repo_id" == "unknown/unknown" || -z "$repo_id" ]]; then
+    echo "Error: could not determine repo id from: $model_ref" >&2
+    return 1
+  fi
+
+  if [[ "$clean" == "1" ]]; then
+    local latest_commit
+    latest_commit="$(fetch_latest_sha "$repo_id")"
+    if [[ -z "$latest_commit" ]]; then
+      echo "Error: could not verify remote repo: $repo_id (network error, repo not found, or private)" >&2
+      return 1
+    fi
+
+    collect_models
+
+    local -a removal_targets=()
+    local path
+    for path in "${MODELS[@]}"; do
+      if [[ "$(model_repo_from_path "$path")" == "$repo_id" ]]; then
+        removal_targets+=("$path")
+      fi
+    done
+
+    if [[ ${#removal_targets[@]} -eq 0 ]]; then
+      echo "No cached files found for $repo_id. Proceeding to download."
+    else
+      echo "Will remove the following cached file(s) for $repo_id:"
+      for path in "${removal_targets[@]}"; do
+        echo "  - $path"
+      done
+
+      if ! confirm_action "Remove these files and re-download the latest version?"; then
+        return 1
+      fi
+
+      for path in "${removal_targets[@]}"; do
+        if [[ -e "$path" || -L "$path" ]]; then
+          rm -f -- "$path"
+          echo "Removed: $path"
+        fi
+      done
+    fi
+  else
+    echo "Re-running llama-server -hf for $repo_id to fetch the latest version."
+  fi
+
+  local -a server_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
+  if autoload_jinja_enabled && ! has_jinja_arg "${user_server_args[@]}"; then
+    server_args+=("--jinja")
+  fi
+  if tools_enabled && ! has_tools_arg "${user_server_args[@]}"; then
+    server_args+=("--tools" "$(default_tools_value)")
+  fi
+  if ! has_ctk_arg "${user_server_args[@]}"; then
+    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
+  fi
+  if ! has_ctv_arg "${user_server_args[@]}"; then
+    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
+  fi
+  if ! has_np_arg "${user_server_args[@]}"; then
+    server_args+=("-np" "$LLAMA_DEFAULT_NP")
+  fi
+  if ! has_fa_arg "${user_server_args[@]}"; then
+    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
+  fi
+  if [[ ${#user_server_args[@]} -gt 0 ]]; then
+    server_args+=("${user_server_args[@]}")
+  fi
+
+  echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"
+  "$LLAMA_SERVER_CMD" "${server_args[@]}"
+}
+
 cmd_install() {
   if [[ $# -gt 1 ]]; then
     echo "Error: install accepts at most one [target-link-path] argument" >&2
@@ -968,6 +1205,14 @@ main() {
     hf)
       shift
       cmd_hf "$@"
+      ;;
+    check-updates)
+      shift
+      cmd_check_updates "$@"
+      ;;
+    update)
+      shift
+      cmd_update "$@"
       ;;
     install)
       shift
