@@ -121,6 +121,12 @@ require_command() {
   fi
 }
 
+usage_error() {
+  echo "Error: $1" >&2
+  print_help
+  exit 1
+}
+
 default_install_target() {
   printf "%s\n" "$HOME/llama-models.sh"
 }
@@ -138,7 +144,7 @@ resolve_target_path() {
   printf "%s\n" "$input"
 }
 
-confirm_action() {
+confirm() {
   local prompt="$1"
   local response
 
@@ -408,6 +414,45 @@ default_tools_value() {
   printf "%s\n" "$LLAMA_DEFAULT_TOOLS"
 }
 
+append_common_server_args() {
+  local -n __args="$1"
+  shift
+
+  if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
+    __args+=("--jinja")
+  fi
+  if tools_enabled && ! has_tools_arg "$@"; then
+    __args+=("--tools" "$(default_tools_value)")
+  fi
+  if ! has_ctk_arg "$@"; then
+    __args+=("-ctk" "$LLAMA_DEFAULT_CTK")
+  fi
+  if ! has_ctv_arg "$@"; then
+    __args+=("-ctv" "$LLAMA_DEFAULT_CTV")
+  fi
+  if ! has_np_arg "$@"; then
+    __args+=("-np" "$LLAMA_DEFAULT_NP")
+  fi
+  if ! has_fa_arg "$@"; then
+    __args+=("-fa" "$LLAMA_DEFAULT_FA")
+  fi
+}
+
+run_llama_server() {
+  local -n __base_args="$1"
+  shift
+  local -a server_args=("${__base_args[@]}")
+
+  append_common_server_args server_args "$@"
+
+  if [[ $# -gt 0 ]]; then
+    server_args+=("$@")
+  fi
+
+  echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"
+  "$LLAMA_SERVER_CMD" "${server_args[@]}"
+}
+
 fetch_latest_sha() {
   local repo_id="$1"
   local api_url="https://huggingface.co/api/models/$repo_id"
@@ -526,26 +571,6 @@ collect_removal_targets() {
   fi
 
   printf "%s\n" "${targets[@]}"
-}
-
-confirm_removal() {
-  local response
-
-  printf "Proceed with deletion? [y/N] "
-  if ! IFS= read -r response < /dev/tty; then
-    printf "\nAborted.\n" >&2
-    return 1
-  fi
-
-  case "$response" in
-    y|Y|yes|YES)
-      return 0
-      ;;
-    *)
-      echo "Aborted." >&2
-      return 1
-      ;;
-  esac
 }
 
 model_repo_from_path() {
@@ -735,9 +760,7 @@ resolve_model() {
 
 cmd_start() {
   if [[ $# -lt 1 ]]; then
-    echo "Error: start requires <index|query|path>" >&2
-    print_help
-    exit 1
+    usage_error "start requires <index|query|path>"
   fi
 
   require_command "$LLAMA_SERVER_CMD"
@@ -748,53 +771,25 @@ cmd_start() {
   local model_path
   model_path="$(resolve_model "$model_ref")"
 
-  local -a server_args=("-m" "$model_path" "-ngl" "$NGL_DEFAULT")
-  if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
-    server_args+=("--jinja")
-  fi
-  if tools_enabled && ! has_tools_arg "$@"; then
-    server_args+=("--tools" "$(default_tools_value)")
-  fi
+  local -a base_args=("-m" "$model_path" "-ngl" "$NGL_DEFAULT")
   if autoload_mmproj_enabled && ! has_mmproj_arg "$@"; then
     local mmproj_path
     if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
-      server_args+=("--mmproj" "$mmproj_path")
+      base_args+=("--mmproj" "$mmproj_path")
     fi
-  fi
-  if ! has_ctk_arg "$@"; then
-    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
-  fi
-  if ! has_ctv_arg "$@"; then
-    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
-  fi
-  if ! has_np_arg "$@"; then
-    server_args+=("-np" "$LLAMA_DEFAULT_NP")
-  fi
-  if ! has_fa_arg "$@"; then
-    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
-  fi
-
-  if [[ $# -gt 0 ]]; then
-    server_args+=("$@")
   fi
 
   echo "Using model: $model_path"
-  echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"
-
-  "$LLAMA_SERVER_CMD" "${server_args[@]}"
+  run_llama_server base_args "$@"
 }
 
 cmd_remove() {
   if [[ $# -lt 1 ]]; then
-    echo "Error: remove requires <index|query|path>" >&2
-    print_help
-    exit 1
+    usage_error "remove requires <index|query|path>"
   fi
 
   if [[ $# -gt 1 ]]; then
-    echo "Error: remove accepts exactly one <index|query|path> argument" >&2
-    print_help
-    exit 1
+    usage_error "remove accepts exactly one <index|query|path> argument"
   fi
 
   local model_ref="$1"
@@ -812,7 +807,7 @@ cmd_remove() {
     echo "  - $target"
   done
 
-  if ! confirm_removal; then
+  if ! confirm "Proceed with deletion?"; then
     return 1
   fi
 
@@ -828,9 +823,7 @@ cmd_remove() {
 
 cmd_hf() {
   if [[ $# -lt 1 ]]; then
-    echo "Error: hf requires <repo-id>" >&2
-    print_help
-    exit 1
+    usage_error "hf requires <repo-id>"
   fi
 
   require_command "$LLAMA_SERVER_CMD"
@@ -838,31 +831,8 @@ cmd_hf() {
   local repo_id="$1"
   shift
 
-  local -a server_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
-  if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
-    server_args+=("--jinja")
-  fi
-  if tools_enabled && ! has_tools_arg "$@"; then
-    server_args+=("--tools" "$(default_tools_value)")
-  fi
-  if ! has_ctk_arg "$@"; then
-    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
-  fi
-  if ! has_ctv_arg "$@"; then
-    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
-  fi
-  if ! has_np_arg "$@"; then
-    server_args+=("-np" "$LLAMA_DEFAULT_NP")
-  fi
-  if ! has_fa_arg "$@"; then
-    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
-  fi
-  if [[ $# -gt 0 ]]; then
-    server_args+=("$@")
-  fi
-
-  echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"
-  "$LLAMA_SERVER_CMD" "${server_args[@]}"
+  local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
+  run_llama_server base_args "$@"
 }
 
 cmd_check_updates() {
@@ -938,9 +908,7 @@ EOF
 
 cmd_update() {
   if [[ $# -lt 1 ]]; then
-    echo "Error: update requires [--clean] <index|query|repo-id>" >&2
-    print_help
-    return 1
+    usage_error "update requires [--clean] <index|query|repo-id>"
   fi
 
   require_command "$LLAMA_SERVER_CMD"
@@ -973,9 +941,7 @@ cmd_update() {
   done
 
   if [[ ${#args[@]} -lt 1 ]]; then
-    echo "Error: update requires <index|query|repo-id>" >&2
-    print_help
-    return 1
+    usage_error "update requires <index|query|repo-id>"
   fi
 
   local model_ref="${args[0]}"
@@ -1031,7 +997,7 @@ cmd_update() {
         echo "  - $path"
       done
 
-      if ! confirm_action "Remove these files and re-download the latest version?"; then
+      if ! confirm "Remove these files and re-download the latest version?"; then
         return 1
       fi
 
@@ -1046,38 +1012,13 @@ cmd_update() {
     echo "Re-running llama-server -hf for $repo_id to fetch the latest version."
   fi
 
-  local -a server_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
-  if autoload_jinja_enabled && ! has_jinja_arg "${user_server_args[@]}"; then
-    server_args+=("--jinja")
-  fi
-  if tools_enabled && ! has_tools_arg "${user_server_args[@]}"; then
-    server_args+=("--tools" "$(default_tools_value)")
-  fi
-  if ! has_ctk_arg "${user_server_args[@]}"; then
-    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
-  fi
-  if ! has_ctv_arg "${user_server_args[@]}"; then
-    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
-  fi
-  if ! has_np_arg "${user_server_args[@]}"; then
-    server_args+=("-np" "$LLAMA_DEFAULT_NP")
-  fi
-  if ! has_fa_arg "${user_server_args[@]}"; then
-    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
-  fi
-  if [[ ${#user_server_args[@]} -gt 0 ]]; then
-    server_args+=("${user_server_args[@]}")
-  fi
-
-  echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"
-  "$LLAMA_SERVER_CMD" "${server_args[@]}"
+  local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
+  run_llama_server base_args "${user_server_args[@]}"
 }
 
 cmd_install() {
   if [[ $# -gt 1 ]]; then
-    echo "Error: install accepts at most one [target-link-path] argument" >&2
-    print_help
-    exit 1
+    usage_error "install accepts at most one [target-link-path] argument"
   fi
 
   local source_path="$SCRIPT_PATH"
@@ -1099,7 +1040,7 @@ cmd_install() {
 
     echo "Target already exists as a symlink:"
     echo "  $target_path -> $existing_link"
-    if ! confirm_action "Replace this existing symlink?"; then
+    if ! confirm "Replace this existing symlink?"; then
       return 1
     fi
   elif [[ -e "$target_path" ]]; then
@@ -1110,11 +1051,11 @@ cmd_install() {
 
     echo "Target already exists and is not a symlink:"
     echo "  $target_path"
-    if ! confirm_action "Replace this existing file?"; then
+    if ! confirm "Replace this existing file?"; then
       return 1
     fi
   else
-    if ! confirm_action "Create this symlink?"; then
+    if ! confirm "Create this symlink?"; then
       return 1
     fi
   fi
@@ -1147,9 +1088,7 @@ EOF
 
 cmd_uninstall() {
   if [[ $# -gt 1 ]]; then
-    echo "Error: uninstall accepts at most one [target-link-path] argument" >&2
-    print_help
-    exit 1
+    usage_error "uninstall accepts at most one [target-link-path] argument"
   fi
 
   local source_path="$SCRIPT_PATH"
@@ -1178,7 +1117,7 @@ cmd_uninstall() {
     return 1
   fi
 
-  if ! confirm_action "Remove this symlink?"; then
+  if ! confirm "Remove this symlink?"; then
     return 1
   fi
 
@@ -1226,9 +1165,7 @@ main() {
       print_help
       ;;
     *)
-      echo "Error: unknown command: $cmd" >&2
-      print_help
-      exit 1
+      usage_error "unknown command: $cmd"
       ;;
   esac
 }
