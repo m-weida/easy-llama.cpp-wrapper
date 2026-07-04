@@ -423,7 +423,8 @@ fetch_latest_sha() {
     return
   fi
 
-  printf "%s" "$response" | sed -n 's/.*"sha"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' | head -n1
+  # Fallback: extract the top-level sha from a flat JSON object.
+  printf "%s" "$response" | sed -n 's/^[[:space:]]*{[^{}]*"sha"[[:space:]]*:[[:space:]]*"\([^"]*\)"[^{}]*}.*/\1/p'
 }
 
 find_mmproj_for_model() {
@@ -911,8 +912,8 @@ EOF
   echo "Checking ${#repo_current_commit[@]} repo(s) for updates..."
   echo
 
-  local current_commit latest_commit file
-  for repo in "${!repo_current_commit[@]}"; do
+  local current_commit latest_commit file repo
+  while IFS= read -r repo; do
     current_commit="${repo_current_commit[$repo]}"
     latest_commit="$(fetch_latest_sha "$repo")"
 
@@ -932,43 +933,58 @@ EOF
     while IFS= read -r file; do
       [[ -n "$file" ]] && printf "  - %s\n" "$(basename "$file")"
     done <<< "${repo_files[$repo]}"
-  done
+  done < <(printf "%s\n" "${!repo_current_commit[@]}" | sort)
 }
 
 cmd_update() {
   if [[ $# -lt 1 ]]; then
     echo "Error: update requires [--clean] <index|query|repo-id>" >&2
     print_help
-    exit 1
+    return 1
   fi
 
   require_command "$LLAMA_SERVER_CMD"
 
   local clean=0
+  local -a args=()
+  local seen_double_dash=0
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --clean)
-        clean=1
+        if [[ "$seen_double_dash" == "0" ]]; then
+          clean=1
+        else
+          args+=("$1")
+        fi
         shift
         ;;
       --)
+        seen_double_dash=1
         shift
+        args+=("$@")
         break
         ;;
       *)
-        break
+        args+=("$1")
+        shift
         ;;
     esac
   done
 
-  if [[ $# -lt 1 ]]; then
+  if [[ ${#args[@]} -lt 1 ]]; then
     echo "Error: update requires <index|query|repo-id>" >&2
     print_help
-    exit 1
+    return 1
   fi
 
-  local model_ref="$1"
-  shift
+  local model_ref="${args[0]}"
+  local -a user_server_args=("${args[@]:1}")
+
+  if [[ "$model_ref" == *.gguf || "$model_ref" == *.GGUF ]]; then
+    echo "Error: update does not accept file paths; use a repo id, index, or query" >&2
+    return 1
+  fi
 
   local model_path
   if [[ "$model_ref" == */* ]]; then
@@ -990,6 +1006,13 @@ cmd_update() {
   fi
 
   if [[ "$clean" == "1" ]]; then
+    local latest_commit
+    latest_commit="$(fetch_latest_sha "$repo_id")"
+    if [[ -z "$latest_commit" ]]; then
+      echo "Error: could not verify remote repo: $repo_id (network error, repo not found, or private)" >&2
+      return 1
+    fi
+
     collect_models
 
     local -a removal_targets=()
@@ -1024,26 +1047,26 @@ cmd_update() {
   fi
 
   local -a server_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
-  if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
+  if autoload_jinja_enabled && ! has_jinja_arg "${user_server_args[@]}"; then
     server_args+=("--jinja")
   fi
-  if tools_enabled && ! has_tools_arg "$@"; then
+  if tools_enabled && ! has_tools_arg "${user_server_args[@]}"; then
     server_args+=("--tools" "$(default_tools_value)")
   fi
-  if ! has_ctk_arg "$@"; then
+  if ! has_ctk_arg "${user_server_args[@]}"; then
     server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
   fi
-  if ! has_ctv_arg "$@"; then
+  if ! has_ctv_arg "${user_server_args[@]}"; then
     server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
   fi
-  if ! has_np_arg "$@"; then
+  if ! has_np_arg "${user_server_args[@]}"; then
     server_args+=("-np" "$LLAMA_DEFAULT_NP")
   fi
-  if ! has_fa_arg "$@"; then
+  if ! has_fa_arg "${user_server_args[@]}"; then
     server_args+=("-fa" "$LLAMA_DEFAULT_FA")
   fi
-  if [[ $# -gt 0 ]]; then
-    server_args+=("$@")
+  if [[ ${#user_server_args[@]} -gt 0 ]]; then
+    server_args+=("${user_server_args[@]}")
   fi
 
   echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"

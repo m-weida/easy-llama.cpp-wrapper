@@ -10,7 +10,7 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 - Enables a safe built-in tool subset by default
 - Auto-loads a sibling `mmproj` file for `start` when one is found
 - Can preview and remove a cached model with a confirmation prompt
-- Checks cached Hugging Face repos for newer commits and updates them in place
+- Checks cached Hugging Face repos for newer commits and reports available updates
 - Can clean old cached files before re-downloading a repo
 
 Script: `./llama-models.sh`
