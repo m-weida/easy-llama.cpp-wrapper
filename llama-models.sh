@@ -38,6 +38,8 @@ LLAMA_DEFAULT_CTK="${LLAMA_DEFAULT_CTK:-q8_0}"
 LLAMA_DEFAULT_CTV="${LLAMA_DEFAULT_CTV:-q4_1}"
 LLAMA_DEFAULT_NP="${LLAMA_DEFAULT_NP:-1}"
 LLAMA_DEFAULT_FA="${LLAMA_DEFAULT_FA:-on}"
+LLAMA_AUTO_MTP="${LLAMA_AUTO_MTP:-1}"
+LLAMA_DEFAULT_SPEC_DRAFT_N_MAX="${LLAMA_DEFAULT_SPEC_DRAFT_N_MAX:-2}"
 
 if [[ -n "${HF_HUB_CACHE:-}" ]]; then
   HF_CACHE_ROOT="$HF_HUB_CACHE"
@@ -66,7 +68,9 @@ Commands:
   list           List downloaded GGUF models from Hugging Face cache.
                  Pass --paths (or -p) to also print each model's full path.
   start          Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
-                 --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
+                 --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP,
+                 -fa $LLAMA_DEFAULT_FA and (for supported models) --model-draft <mtp> --spec-type draft-mtp
+                 --spec-draft-n-max $LLAMA_DEFAULT_SPEC_DRAFT_N_MAX by default.
   remove         Preview and remove a local GGUF model plus safe associated files.
   hf             Start llama-server directly from a Hugging Face repo via -hf
                  with -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
@@ -109,6 +113,9 @@ Config (optional env vars):
   LLAMA_DEFAULT_CTV Default value for -ctv (default: q4_1)
   LLAMA_DEFAULT_NP  Default value for -np (default: 1)
   LLAMA_DEFAULT_FA  Default value for -fa (default: on)
+  LLAMA_AUTO_MTP    Auto-load MTP draft models for supported models (default: 1)
+  LLAMA_DEFAULT_SPEC_DRAFT_N_MAX
+                    Default value for --spec-draft-n-max (default: 2)
   HF_HUB_CACHE      Hugging Face hub cache directory
   HF_HOME           Hugging Face home directory (uses \$HF_HOME/hub)
 EOF
@@ -290,6 +297,17 @@ autoload_mmproj_enabled() {
   esac
 }
 
+autoload_mtp_enabled() {
+  case "$LLAMA_AUTO_MTP" in
+    0|false|no|off)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 tools_enabled() {
   case "$LLAMA_ENABLE_TOOLS" in
     0|false|no|off)
@@ -402,6 +420,48 @@ has_fa_arg() {
   for arg in "$@"; do
     case "$arg" in
       -fa|--flash-attn|--flash-attn=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_model_draft_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --model-draft|--model-draft=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_spec_type_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --spec-type|--spec-type=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_spec_draft_n_max_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --spec-draft-n-max|--spec-draft-n-max=*)
         return 0
         ;;
     esac
@@ -557,16 +617,109 @@ mmproj_is_shared() {
   return 1
 }
 
+find_mtp_for_model() {
+  local model_path="$1"
+  local model_dir candidate candidate_path
+  local -a candidates=()
+  local -a scores=()
+  local i best_score=0 best_idx=-1 best_tied=0 score
+  local model_text
+
+  model_dir="$(dirname "$model_path")"
+  model_text="$(basename "$model_path")"
+
+  while IFS= read -r candidate; do
+    candidate_path="$candidate"
+    candidates+=("$candidate_path")
+    scores+=("$(candidate_token_score "$(basename "$candidate_path")" "$model_text")")
+  done < <(
+    find "$model_dir" -maxdepth 1 \( -type f -o -type l \) -iname 'mtp-*.gguf' 2>/dev/null | sort
+  )
+
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  if [[ ${#candidates[@]} -eq 1 ]]; then
+    echo "Info: auto-selected MTP draft model: ${candidates[0]}" >&2
+    printf "%s\n" "${candidates[0]}"
+    return 0
+  fi
+
+  for i in "${!candidates[@]}"; do
+    score="${scores[$i]}"
+    if (( score > best_score )); then
+      best_score=$score
+      best_idx=$i
+      best_tied=0
+    elif (( score > 0 && score == best_score )); then
+      best_tied=1
+    fi
+  done
+
+  if (( best_score > 0 && best_tied == 0 && best_idx >= 0 )); then
+    echo "Info: auto-selected MTP draft model: ${candidates[$best_idx]}" >&2
+    printf "%s\n" "${candidates[$best_idx]}"
+    return 0
+  fi
+
+  echo "Warning: found multiple MTP candidates next to model, but could not choose one unambiguously." >&2
+  for candidate in "${candidates[@]}"; do
+    echo "  $candidate" >&2
+  done
+  return 1
+}
+
+mtp_is_shared() {
+  local mtp_path="$1"
+  local model_path="$2"
+  local model_dir sibling_path sibling_mtp_path
+  local resolved_mtp resolved_sibling_mtp
+
+  model_dir="$(dirname "$model_path")"
+  resolved_mtp="$(resolve_physical_path "$mtp_path")"
+
+  while IFS= read -r sibling_path; do
+    if [[ "$sibling_path" == "$model_path" ]]; then
+      continue
+    fi
+
+    if ! sibling_mtp_path="$(find_mtp_for_model "$sibling_path" 2>/dev/null)"; then
+      continue
+    fi
+
+    resolved_sibling_mtp="$(resolve_physical_path "$sibling_mtp_path")"
+    if [[ "$resolved_sibling_mtp" == "$resolved_mtp" ]]; then
+      return 0
+    fi
+  done < <(
+    find "$model_dir" -maxdepth 1 \( -type f -o -type l \) \
+      \( -name '*.gguf' -o -name '*.GGUF' \) \
+      ! -iname '*mmproj*' \
+      ! -iname 'mtp-*.gguf' 2>/dev/null | sort
+  )
+
+  return 1
+}
+
 collect_removal_targets() {
   local model_path="$1"
   local -a targets=("$model_path")
-  local mmproj_path
+  local mmproj_path mtp_path
 
   if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
     if mmproj_is_shared "$mmproj_path" "$model_path"; then
       echo "Info: mmproj is shared with other model(s), keeping: $mmproj_path" >&2
     else
       targets+=("$mmproj_path")
+    fi
+  fi
+
+  if mtp_path="$(find_mtp_for_model "$model_path")"; then
+    if mtp_is_shared "$mtp_path" "$model_path"; then
+      echo "Info: MTP draft model is shared with other model(s), keeping: $mtp_path" >&2
+    else
+      targets+=("$mtp_path")
     fi
   fi
 
@@ -598,9 +751,15 @@ collect_models() {
   fi
 
   while IFS= read -r path; do
+    local base
+    base="$(basename "$path")"
     # skip GGUF files that were generated from .mmproj exports
     # (they often include the substring 'mmproj' in the filename)
-    if [[ "$(basename "$path")" == *mmproj* ]]; then
+    if [[ "$base" == *mmproj* ]]; then
+      continue
+    fi
+    # skip standalone MTP draft models; they are loaded alongside the main model
+    if [[ "${base,,}" == mtp-*.gguf ]]; then
       continue
     fi
     MODELS+=("$path")
@@ -776,6 +935,16 @@ cmd_start() {
     local mmproj_path
     if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
       base_args+=("--mmproj" "$mmproj_path")
+    fi
+  fi
+
+  if autoload_mtp_enabled && ! has_model_draft_arg "$@" && ! has_spec_type_arg "$@"; then
+    local mtp_path
+    if mtp_path="$(find_mtp_for_model "$model_path")"; then
+      base_args+=("--model-draft" "$mtp_path" "--spec-type" "draft-mtp")
+      if ! has_spec_draft_n_max_arg "$@"; then
+        base_args+=("--spec-draft-n-max" "$LLAMA_DEFAULT_SPEC_DRAFT_N_MAX")
+      fi
     fi
   fi
 
