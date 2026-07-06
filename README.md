@@ -9,7 +9,7 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 - Starts directly from Hugging Face via `-hf` with the same default flags
 - Enables a safe built-in tool subset by default
 - Auto-loads a sibling `mmproj` file for `start` and `hf` when one is found
-- Auto-loads a sibling `mtp-*.gguf` draft model for `start` and `hf` when one is found
+- Auto-loads a sibling `mtp-*.gguf` draft model for `start` when one is found, and enables MTP for `hf`
 - Can preview and remove a cached model with a confirmation prompt
 - Checks cached Hugging Face repos for newer commits and reports available updates
 - Can clean old cached files before re-downloading a repo
@@ -156,11 +156,8 @@ If you already pass `--mmproj`, the script leaves it alone.
 If a matching `mtp-*.gguf` file is next to the resolved model, `start` adds it automatically as a draft model with `--model-draft <mtp> --spec-type draft-mtp --spec-draft-n-max 2`.
 If you already pass `--model-draft` or `--spec-type`, the script leaves those alone.
 
-When using `hf`, the script also enables MTP automatically for supported model families:
-
-- Gemma 4 repos (e.g. `unsloth/gemma-4-12B-it-qat-GGUF`) use the same repo as the draft model.
-- Qwen repos (e.g. `unsloth/Qwen3.6-27B-GGUF`) map to the matching `*-MTP-GGUF` repo as the draft model.
-- Already-MTP repos (e.g. `unsloth/Qwen3.6-27B-MTP-GGUF`) are left alone.
+When using `hf`, the script enables MTP by adding `--spec-type draft-mtp --spec-draft-n-max 2`.
+`llama-server` then uses a bundled MTP layer or downloads the draft model automatically, depending on the repo.
 
 `remove` prints the exact paths it will delete, then asks for confirmation before removing anything. The prompt defaults to `y/N`, so pressing Enter aborts the deletion.
 
