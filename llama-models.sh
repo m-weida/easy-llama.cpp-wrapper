@@ -67,13 +67,13 @@ Usage:
 Commands:
   list           List downloaded GGUF models from Hugging Face cache.
                  Pass --paths (or -p) to also print each model's full path.
-  start          Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
-                 --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP,
-                 -fa $LLAMA_DEFAULT_FA and (for supported models) --model-draft <mtp> --spec-type draft-mtp
-                 --spec-draft-n-max $LLAMA_DEFAULT_SPEC_DRAFT_N_MAX by default.
+  start          Start llama-server with a local GGUF model.
+                 For supported models, also auto-loads a sibling MTP draft model
+                 with --model-draft <mtp> --spec-type draft-mtp
+                 --spec-draft-n-max $LLAMA_DEFAULT_SPEC_DRAFT_N_MAX.
   remove         Preview and remove a local GGUF model plus safe associated files.
-  hf             Start llama-server directly from a Hugging Face repo via -hf
-                 with -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
+  hf             Start llama-server directly from a Hugging Face repo via -hf.
+                 Same auto-load behavior as start for supported models.
   check-updates  Check cached Hugging Face repos for newer commits on the
                  default branch and report which models have updates.
   update         Re-run llama-server -hf for a repo to fetch the latest version.
@@ -81,6 +81,10 @@ Commands:
   install        Create a symlink to this script after confirming the target path.
   uninstall      Remove the symlink created by install after confirming it points here.
   help           Show this help.
+
+Default llama-server flags (added for start/hf unless overridden):
+  -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV,
+  -np $LLAMA_DEFAULT_NP, -fa $LLAMA_DEFAULT_FA
 
 Examples:
   $SCRIPT_NAME list
@@ -702,6 +706,37 @@ mtp_is_shared() {
   return 1
 }
 
+resolve_mtp_hf_repo() {
+  local repo_id="$1"
+  local owner repo
+
+  if [[ "$repo_id" != */* ]]; then
+    return 1
+  fi
+
+  owner="${repo_id%%/*}"
+  repo="${repo_id#*/}"
+
+  # Gemma 4 repos ship an mtp-*.gguf inside the same repo.
+  # Qwen3.6/Qwen3.5 MTP variants live in a separate *-MTP-GGUF repo.
+  case "$repo" in
+    *-MTP-GGUF|*-MTP|*-mtp|*-mtp-GGUF)
+      # Already an MTP repo; no separate draft model needed.
+      return 1
+      ;;
+    gemma-4-*|gemma4-*|Gemma-4-*|Gemma4-*)
+      printf "%s\n" "$repo_id"
+      return 0
+      ;;
+    qwen*|Qwen*)
+      printf "%s/%s-MTP-GGUF\n" "$owner" "$repo"
+      return 0
+      ;;
+  esac
+
+  return 1
+}
+
 collect_removal_targets() {
   local model_path="$1"
   local -a targets=("$model_path")
@@ -1001,6 +1036,17 @@ cmd_hf() {
   shift
 
   local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
+
+  if autoload_mtp_enabled && ! has_model_draft_arg "$@" && ! has_spec_type_arg "$@"; then
+    local mtp_repo_id
+    if mtp_repo_id="$(resolve_mtp_hf_repo "$repo_id")"; then
+      base_args+=("--model-draft" "$mtp_repo_id" "--spec-type" "draft-mtp")
+      if ! has_spec_draft_n_max_arg "$@"; then
+        base_args+=("--spec-draft-n-max" "$LLAMA_DEFAULT_SPEC_DRAFT_N_MAX")
+      fi
+    fi
+  fi
+
   run_llama_server base_args "$@"
 }
 
