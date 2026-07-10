@@ -8,7 +8,7 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 - Starts a local GGUF model with the default `llama-server` flags (see below)
 - Starts directly from Hugging Face via `-hf` with the same default flags
 - Enables a safe built-in tool subset by default
-- Auto-loads a sibling `mmproj` file for `start` and `hf` when one is found
+- Auto-loads a sibling `mmproj` file for `start` when one is found
 - Auto-loads a sibling `mtp-*.gguf` draft model for `start` when one is found
 - Can preview and remove a cached model with a confirmation prompt
 - Checks cached Hugging Face repos for newer commits and reports available updates
@@ -20,7 +20,7 @@ Script: `./llama-models.sh`
 
 - `llama-server` available in your `PATH`
 - Hugging Face cache present (usually `~/.cache/huggingface/hub`)
-- Bash 3.2 or newer (`bash --version`), plus the usual POSIX tools (`find`, `sed`, `tr`, `basename`, `dirname`, `readlink`)
+- Bash 3.2 or newer (`bash --version`), plus the usual tools (`find`, `sed`, `tr`, `basename`, `dirname`, `readlink`, `curl`; optional: `jq`)
 
 The script is a Bash script even when launched from a zsh prompt. Use `./llama-models.sh ...`; do not run it as `zsh llama-models.sh ...` or `sh llama-models.sh ...`.
 
@@ -157,7 +157,7 @@ LLAMA_DEFAULT_TOOLS=all ./llama-models.sh start 1
 If a matching `mmproj` file is next to the resolved model, `start` adds it automatically.
 If you already pass `--mmproj`, the script leaves it alone.
 
-If a matching `mtp-*.gguf` file is next to the resolved model, `start` adds it automatically as a draft model with `--model-draft <mtp> --spec-type draft-mtp --spec-draft-n-max 2`.
+If a matching `mtp-*.gguf` file is next to the resolved model, `start` adds it automatically as a draft model with `--model-draft <mtp> --spec-type draft-mtp --spec-draft-n-max $LLAMA_DEFAULT_SPEC_DRAFT_N_MAX`.
 If you already pass `--model-draft` or `--spec-type`, the script leaves those alone.
 
 When using `hf`, MTP is not enabled automatically. Hugging Face repositories do not
