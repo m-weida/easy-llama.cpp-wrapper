@@ -5,10 +5,11 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 ## What it does
 
 - Lists locally cached Hugging Face GGUF models in a compact repo-and-filename view by default
-- Starts a local GGUF model with `-ngl 99`, `--jinja`, `-ctk q8_0`, `-ctv q4_1`, `-np 1`, and `-fa on` by default
+- Starts a local GGUF model with the default `llama-server` flags (see below)
 - Starts directly from Hugging Face via `-hf` with the same default flags
 - Enables a safe built-in tool subset by default
 - Auto-loads a sibling `mmproj` file for `start` when one is found
+- Auto-loads a sibling `mtp-*.gguf` draft model for `start` when one is found
 - Can preview and remove a cached model with a confirmation prompt
 - Checks cached Hugging Face repos for newer commits and reports available updates
 - Can clean old cached files before re-downloading a repo
@@ -19,12 +20,16 @@ Script: `./llama-models.sh`
 
 - `llama-server` available in your `PATH`
 - Hugging Face cache present (usually `~/.cache/huggingface/hub`)
-- A bash-compatible shell
+- Bash 3.2 or newer (`bash --version`), plus the usual tools (`find`, `sed`, `tr`, `basename`, `dirname`, `readlink`, `curl`; optional: `jq`)
+
+The script is a Bash script even when launched from a zsh prompt. Use `./llama-models.sh ...`; do not run it as `zsh llama-models.sh ...` or `sh llama-models.sh ...`.
 
 Windows notes:
 
-- Run the script from Git Bash, MSYS2, Cygwin, or WSL.
-- `install` creates a symlink, which may require Windows Developer Mode or an elevated shell.
+- Run the script from 64-bit Git Bash (MINGW64), MSYS2, Cygwin, or WSL. Git Bash must have Bash and `find`, `sed`, `tr`, `basename`, `dirname`, and `readlink` available.
+- Git Bash paths such as `/c/Users/...` are supported. Native `C:/Users/...` paths are normalized when passed to the wrapper.
+- `llama-server` must also be invokable from that same Bash environment; set `LLAMA_SERVER_CMD` to its path if it is not on `PATH`.
+- `install` creates a symlink, which may require Windows Developer Mode or an elevated shell. If symlink creation is unavailable, run the script directly instead of using `install`.
 
 ## Install / uninstall
 
@@ -125,6 +130,12 @@ You can disable that default with:
 LLAMA_AUTO_JINJA=0 ./llama-models.sh start 1
 ```
 
+You can disable automatic MTP draft loading with:
+
+```bash
+LLAMA_AUTO_MTP=0 ./llama-models.sh start 1
+```
+
 The wrapper also adds this safe default tool set for both `start` and `hf`:
 
 ```text
@@ -145,6 +156,13 @@ LLAMA_DEFAULT_TOOLS=all ./llama-models.sh start 1
 
 If a matching `mmproj` file is next to the resolved model, `start` adds it automatically.
 If you already pass `--mmproj`, the script leaves it alone.
+
+If a matching `mtp-*.gguf` file is next to the resolved model, `start` adds it automatically as a draft model with `--model-draft <mtp> --spec-type draft-mtp --spec-draft-n-max $LLAMA_DEFAULT_SPEC_DRAFT_N_MAX`.
+If you already pass `--model-draft` or `--spec-type`, the script leaves those alone.
+
+When using `hf`, MTP is not enabled automatically. Hugging Face repositories do not
+necessarily provide a compatible `mtp-*.gguf` artifact, so pass `--model-draft`
+and the desired `--spec-type` explicitly when MTP is supported by the repository.
 
 `remove` prints the exact paths it will delete, then asks for confirmation before removing anything. The prompt defaults to `y/N`, so pressing Enter aborts the deletion.
 
@@ -243,6 +261,8 @@ Example: if only `Q4_K_M` is cached, querying `Q5_K_M gemma 4` will pick that `Q
 - `LLAMA_DEFAULT_NP` (default: `1`)
 - `LLAMA_DEFAULT_FA` (default: `on`)
 - `LLAMA_AUTO_MMPROJ` (default: `1`)
+- `LLAMA_AUTO_MTP` (default: `1`; controls automatic MTP draft loading for `start`; set `0`, `false`, `no`, or `off` to opt out)
+- `LLAMA_DEFAULT_SPEC_DRAFT_N_MAX` (default: `2`)
 - `HF_HUB_CACHE` (explicit HF hub cache path)
 - `HF_HOME` (uses `$HF_HOME/hub`)
 

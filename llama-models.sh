@@ -1,13 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -z "${BASH_VERSION:-}" ]]; then
+  echo "Error: $0 must be run with Bash, not zsh or sh." >&2
+  exit 1
+fi
+
+if (( BASH_VERSINFO[0] < 3 || (BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 2) )); then
+  echo "Error: $0 requires Bash 3.2 or newer (found $BASH_VERSION)." >&2
+  exit 1
+fi
+
 SCRIPT_NAME="$(basename "$0")"
+
+normalize_platform_path() {
+  local path="$1"
+
+  # Git Bash accepts both /c/... and C:/... paths, but its Unix tools are
+  # more reliable with the former. Normalize native Windows paths at the
+  # shell boundary while leaving POSIX paths unchanged elsewhere.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if [[ "$path" =~ ^[A-Za-z]:[\\/].* ]] && command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "$path"
+        return
+      fi
+      ;;
+  esac
+
+  printf "%s\n" "$path"
+}
 
 resolve_physical_path() {
   local path="$1"
   local link_target dir
 
   path="${path/#\~/$HOME}"
+  path="$(normalize_platform_path "$path")"
 
   if [[ "$path" != /* ]]; then
     path="$PWD/$path"
@@ -29,6 +58,7 @@ resolve_physical_path() {
 
 SCRIPT_PATH="$(resolve_physical_path "${BASH_SOURCE[0]}")"
 LLAMA_SERVER_CMD="${LLAMA_SERVER_CMD:-llama-server}"
+LLAMA_SERVER_CMD="$(normalize_platform_path "$LLAMA_SERVER_CMD")"
 NGL_DEFAULT="${NGL_DEFAULT:-99}"
 LLAMA_AUTO_MMPROJ="${LLAMA_AUTO_MMPROJ:-1}"
 LLAMA_AUTO_JINJA="${LLAMA_AUTO_JINJA:-1}"
@@ -38,6 +68,8 @@ LLAMA_DEFAULT_CTK="${LLAMA_DEFAULT_CTK:-q8_0}"
 LLAMA_DEFAULT_CTV="${LLAMA_DEFAULT_CTV:-q4_1}"
 LLAMA_DEFAULT_NP="${LLAMA_DEFAULT_NP:-1}"
 LLAMA_DEFAULT_FA="${LLAMA_DEFAULT_FA:-on}"
+LLAMA_AUTO_MTP="${LLAMA_AUTO_MTP:-1}"
+LLAMA_DEFAULT_SPEC_DRAFT_N_MAX="${LLAMA_DEFAULT_SPEC_DRAFT_N_MAX:-2}"
 
 if [[ -n "${HF_HUB_CACHE:-}" ]]; then
   HF_CACHE_ROOT="$HF_HUB_CACHE"
@@ -46,6 +78,7 @@ elif [[ -n "${HF_HOME:-}" ]]; then
 else
   HF_CACHE_ROOT="$HOME/.cache/huggingface/hub"
 fi
+HF_CACHE_ROOT="$(normalize_platform_path "$HF_CACHE_ROOT")"
 
 declare -a MODELS=()
 
@@ -65,11 +98,13 @@ Usage:
 Commands:
   list           List downloaded GGUF models from Hugging Face cache.
                  Pass --paths (or -p) to also print each model's full path.
-  start          Start llama-server with a local GGUF model, -ngl $NGL_DEFAULT,
-                 --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
+  start          Start llama-server with a local GGUF model.
+                 Auto-loads a sibling MTP draft model (mtp-*.gguf) when found,
+                 using --model-draft <mtp> --spec-type draft-mtp
+                 --spec-draft-n-max $LLAMA_DEFAULT_SPEC_DRAFT_N_MAX.
   remove         Preview and remove a local GGUF model plus safe associated files.
-  hf             Start llama-server directly from a Hugging Face repo via -hf
-                 with -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV, -np $LLAMA_DEFAULT_NP and -fa $LLAMA_DEFAULT_FA by default.
+  hf             Start llama-server directly from a Hugging Face repo via -hf.
+                 MTP remains opt-in because not every repo provides a compatible draft model.
   check-updates  Check cached Hugging Face repos for newer commits on the
                  default branch and report which models have updates.
   update         Re-run llama-server -hf for a repo to fetch the latest version.
@@ -77,6 +112,10 @@ Commands:
   install        Create a symlink to this script after confirming the target path.
   uninstall      Remove the symlink created by install after confirming it points here.
   help           Show this help.
+
+Default llama-server flags (added for start/hf unless overridden):
+  -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV,
+  -np $LLAMA_DEFAULT_NP, -fa $LLAMA_DEFAULT_FA
 
 Examples:
   $SCRIPT_NAME list
@@ -109,6 +148,9 @@ Config (optional env vars):
   LLAMA_DEFAULT_CTV Default value for -ctv (default: q4_1)
   LLAMA_DEFAULT_NP  Default value for -np (default: 1)
   LLAMA_DEFAULT_FA  Default value for -fa (default: on)
+  LLAMA_AUTO_MTP    Auto-load MTP draft models for supported models (default: 1)
+  LLAMA_DEFAULT_SPEC_DRAFT_N_MAX
+                    Default value for --spec-draft-n-max (default: 2)
   HF_HUB_CACHE      Hugging Face hub cache directory
   HF_HOME           Hugging Face home directory (uses \$HF_HOME/hub)
 EOF
@@ -135,6 +177,7 @@ resolve_target_path() {
   local input="${1:-$(default_install_target)}"
 
   input="${input/#\~/$HOME}"
+  input="$(normalize_platform_path "$input")"
 
   if [[ "$input" != /* ]]; then
     printf "%s\n" "$PWD/$input"
@@ -290,6 +333,17 @@ autoload_mmproj_enabled() {
   esac
 }
 
+autoload_mtp_enabled() {
+  case "$LLAMA_AUTO_MTP" in
+    0|false|no|off)
+      return 1
+      ;;
+    *)
+      return 0
+      ;;
+  esac
+}
+
 tools_enabled() {
   case "$LLAMA_ENABLE_TOOLS" in
     0|false|no|off)
@@ -410,40 +464,83 @@ has_fa_arg() {
   return 1
 }
 
+has_model_draft_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --model-draft|--model-draft=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_spec_type_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --spec-type|--spec-type=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
+has_spec_draft_n_max_arg() {
+  local arg
+
+  for arg in "$@"; do
+    case "$arg" in
+      --spec-draft-n-max|--spec-draft-n-max=*)
+        return 0
+        ;;
+    esac
+  done
+
+  return 1
+}
+
 default_tools_value() {
   printf "%s\n" "$LLAMA_DEFAULT_TOOLS"
 }
 
-append_common_server_args() {
-  local -n __args="$1"
+run_llama_server() {
+  # Bash 3.2 (the version shipped with macOS) has no nameref variables.
+  # Receive the number of base arguments, then the base and user arguments.
+  local base_arg_count="$1"
   shift
+  local -a server_args=()
+  local i
+
+  for ((i = 0; i < base_arg_count; i++)); do
+    server_args+=("$1")
+    shift
+  done
 
   if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
-    __args+=("--jinja")
+    server_args+=("--jinja")
   fi
   if tools_enabled && ! has_tools_arg "$@"; then
-    __args+=("--tools" "$(default_tools_value)")
+    server_args+=("--tools" "$(default_tools_value)")
   fi
   if ! has_ctk_arg "$@"; then
-    __args+=("-ctk" "$LLAMA_DEFAULT_CTK")
+    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
   fi
   if ! has_ctv_arg "$@"; then
-    __args+=("-ctv" "$LLAMA_DEFAULT_CTV")
+    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
   fi
   if ! has_np_arg "$@"; then
-    __args+=("-np" "$LLAMA_DEFAULT_NP")
+    server_args+=("-np" "$LLAMA_DEFAULT_NP")
   fi
   if ! has_fa_arg "$@"; then
-    __args+=("-fa" "$LLAMA_DEFAULT_FA")
+    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
   fi
-}
-
-run_llama_server() {
-  local -n __base_args="$1"
-  shift
-  local -a server_args=("${__base_args[@]}")
-
-  append_common_server_args server_args "$@"
 
   if [[ $# -gt 0 ]]; then
     server_args+=("$@")
@@ -557,16 +654,109 @@ mmproj_is_shared() {
   return 1
 }
 
+find_mtp_for_model() {
+  local model_path="$1"
+  local model_dir candidate candidate_path
+  local -a candidates=()
+  local -a scores=()
+  local i best_score=0 best_idx=-1 best_tied=0 score
+  local model_text
+
+  model_dir="$(dirname "$model_path")"
+  model_text="$(basename "$model_path")"
+
+  while IFS= read -r candidate; do
+    candidate_path="$candidate"
+    candidates+=("$candidate_path")
+    scores+=("$(candidate_token_score "$(basename "$candidate_path")" "$model_text")")
+  done < <(
+    find "$model_dir" -maxdepth 1 \( -type f -o -type l \) -iname 'mtp-*.gguf' 2>/dev/null | sort
+  )
+
+  if [[ ${#candidates[@]} -eq 0 ]]; then
+    return 1
+  fi
+
+  if [[ ${#candidates[@]} -eq 1 ]]; then
+    echo "Info: auto-selected MTP draft model: ${candidates[0]}" >&2
+    printf "%s\n" "${candidates[0]}"
+    return 0
+  fi
+
+  for i in "${!candidates[@]}"; do
+    score="${scores[$i]}"
+    if (( score > best_score )); then
+      best_score=$score
+      best_idx=$i
+      best_tied=0
+    elif (( score > 0 && score == best_score )); then
+      best_tied=1
+    fi
+  done
+
+  if (( best_score > 0 && best_tied == 0 && best_idx >= 0 )); then
+    echo "Info: auto-selected MTP draft model: ${candidates[$best_idx]}" >&2
+    printf "%s\n" "${candidates[$best_idx]}"
+    return 0
+  fi
+
+  echo "Warning: found multiple MTP candidates next to model, but could not choose one unambiguously." >&2
+  for candidate in "${candidates[@]}"; do
+    echo "  $candidate" >&2
+  done
+  return 1
+}
+
+mtp_is_shared() {
+  local mtp_path="$1"
+  local model_path="$2"
+  local model_dir sibling_path sibling_mtp_path
+  local resolved_mtp resolved_sibling_mtp
+
+  model_dir="$(dirname "$model_path")"
+  resolved_mtp="$(resolve_physical_path "$mtp_path")"
+
+  while IFS= read -r sibling_path; do
+    if [[ "$sibling_path" == "$model_path" ]]; then
+      continue
+    fi
+
+    if ! sibling_mtp_path="$(find_mtp_for_model "$sibling_path" 2>/dev/null)"; then
+      continue
+    fi
+
+    resolved_sibling_mtp="$(resolve_physical_path "$sibling_mtp_path")"
+    if [[ "$resolved_sibling_mtp" == "$resolved_mtp" ]]; then
+      return 0
+    fi
+  done < <(
+    find "$model_dir" -maxdepth 1 \( -type f -o -type l \) \
+      \( -name '*.gguf' -o -name '*.GGUF' \) \
+      ! -iname '*mmproj*' \
+      ! -iname 'mtp-*.gguf' 2>/dev/null | sort
+  )
+
+  return 1
+}
+
 collect_removal_targets() {
   local model_path="$1"
   local -a targets=("$model_path")
-  local mmproj_path
+  local mmproj_path mtp_path
 
   if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
     if mmproj_is_shared "$mmproj_path" "$model_path"; then
       echo "Info: mmproj is shared with other model(s), keeping: $mmproj_path" >&2
     else
       targets+=("$mmproj_path")
+    fi
+  fi
+
+  if mtp_path="$(find_mtp_for_model "$model_path")"; then
+    if mtp_is_shared "$mtp_path" "$model_path"; then
+      echo "Info: MTP draft model is shared with other model(s), keeping: $mtp_path" >&2
+    else
+      targets+=("$mtp_path")
     fi
   fi
 
@@ -598,9 +788,16 @@ collect_models() {
   fi
 
   while IFS= read -r path; do
+    local base base_lower
+    base="$(basename "$path")"
+    base_lower="$(printf "%s" "$base" | tr '[:upper:]' '[:lower:]')"
     # skip GGUF files that were generated from .mmproj exports
     # (they often include the substring 'mmproj' in the filename)
-    if [[ "$(basename "$path")" == *mmproj* ]]; then
+    if [[ "$base" == *mmproj* ]]; then
+      continue
+    fi
+    # skip standalone MTP draft models; they are loaded alongside the main model
+    if [[ "$base_lower" == mtp-*.gguf ]]; then
       continue
     fi
     MODELS+=("$path")
@@ -678,6 +875,7 @@ resolve_model() {
   if [[ "$input" == *.gguf || "$input" == *.GGUF ]]; then
     local expanded_input
     expanded_input="${input/#\~/$HOME}"
+    expanded_input="$(normalize_platform_path "$expanded_input")"
     if [[ -f "$expanded_input" ]]; then
       printf "%s\n" "$expanded_input"
       return 0
@@ -779,8 +977,18 @@ cmd_start() {
     fi
   fi
 
+  if autoload_mtp_enabled && ! has_model_draft_arg "$@" && ! has_spec_type_arg "$@"; then
+    local mtp_path
+    if mtp_path="$(find_mtp_for_model "$model_path")"; then
+      base_args+=("--model-draft" "$mtp_path" "--spec-type" "draft-mtp")
+      if ! has_spec_draft_n_max_arg "$@"; then
+        base_args+=("--spec-draft-n-max" "$LLAMA_DEFAULT_SPEC_DRAFT_N_MAX")
+      fi
+    fi
+  fi
+
   echo "Using model: $model_path"
-  run_llama_server base_args "$@"
+  run_llama_server "${#base_args[@]}" "${base_args[@]}" "$@"
 }
 
 cmd_remove() {
@@ -832,7 +1040,12 @@ cmd_hf() {
   shift
 
   local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
-  run_llama_server base_args "$@"
+
+  # Do not infer MTP support from the repo id alone. Hugging Face repos may
+  # not contain a compatible mtp-*.gguf artifact, and an explicit
+  # --model-draft or --spec-type must always be left untouched. Users can
+  # still opt into MTP explicitly by passing the relevant llama-server flags.
+  run_llama_server "${#base_args[@]}" "${base_args[@]}" "$@"
 }
 
 cmd_check_updates() {
@@ -853,9 +1066,12 @@ EOF
     return 0
   fi
 
-  declare -A repo_current_commit
-  declare -A repo_files
-  local path repo commit
+  # Keep these as indexed arrays: Bash 3.2 (macOS) does not support
+  # associative arrays.
+  local -a repo_names=()
+  local -a repo_current_commits=()
+  local -a repo_file_lists=()
+  local path repo commit repo_index i
 
   for path in "${MODELS[@]}"; do
     repo="$(model_repo_from_path "$path")"
@@ -865,26 +1081,42 @@ EOF
 
     commit="${path#*/snapshots/}"
     commit="${commit%%/*}"
+    repo_index=-1
+    for i in "${!repo_names[@]}"; do
+      if [[ "${repo_names[$i]}" == "$repo" ]]; then
+        repo_index="$i"
+        break
+      fi
+    done
 
-    repo_current_commit["$repo"]="$commit"
-    if [[ -z "${repo_files[$repo]:-}" ]]; then
-      repo_files["$repo"]="$path"
+    if (( repo_index < 0 )); then
+      repo_names+=("$repo")
+      repo_current_commits+=("$commit")
+      repo_file_lists+=("$path")
     else
-      repo_files["$repo"]="${repo_files[$repo]}"$'\n'"$path"
+      repo_current_commits[$repo_index]="$commit"
+      repo_file_lists[$repo_index]="${repo_file_lists[$repo_index]}"$'\n'"$path"
     fi
   done
 
-  if [[ ${#repo_current_commit[@]} -eq 0 ]]; then
+  if [[ ${#repo_names[@]} -eq 0 ]]; then
     echo "No Hugging Face models found to check."
     return 0
   fi
 
-  echo "Checking ${#repo_current_commit[@]} repo(s) for updates..."
+  echo "Checking ${#repo_names[@]} repo(s) for updates..."
   echo
 
-  local current_commit latest_commit file repo
+  local current_commit latest_commit file
   while IFS= read -r repo; do
-    current_commit="${repo_current_commit[$repo]}"
+    repo_index=-1
+    for i in "${!repo_names[@]}"; do
+      if [[ "${repo_names[$i]}" == "$repo" ]]; then
+        repo_index="$i"
+        break
+      fi
+    done
+    current_commit="${repo_current_commits[$repo_index]}"
     latest_commit="$(fetch_latest_sha "$repo")"
 
     if [[ -z "$latest_commit" ]]; then
@@ -902,8 +1134,8 @@ EOF
 
     while IFS= read -r file; do
       [[ -n "$file" ]] && printf "  - %s\n" "$(basename "$file")"
-    done <<< "${repo_files[$repo]}"
-  done < <(printf "%s\n" "${!repo_current_commit[@]}" | sort)
+    done <<< "${repo_file_lists[$repo_index]}"
+  done < <(printf "%s\n" "${repo_names[@]}" | sort)
 }
 
 cmd_update() {
@@ -1013,7 +1245,7 @@ cmd_update() {
   fi
 
   local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
-  run_llama_server base_args "${user_server_args[@]}"
+  run_llama_server "${#base_args[@]}" "${base_args[@]}" "${user_server_args[@]}"
 }
 
 cmd_install() {
