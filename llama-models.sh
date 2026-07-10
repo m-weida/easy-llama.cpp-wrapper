@@ -1,13 +1,42 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+if [[ -z "${BASH_VERSION:-}" ]]; then
+  echo "Error: $0 must be run with Bash, not zsh or sh." >&2
+  exit 1
+fi
+
+if (( BASH_VERSINFO[0] < 3 || (BASH_VERSINFO[0] == 3 && BASH_VERSINFO[1] < 2) )); then
+  echo "Error: $0 requires Bash 3.2 or newer (found $BASH_VERSION)." >&2
+  exit 1
+fi
+
 SCRIPT_NAME="$(basename "$0")"
+
+normalize_platform_path() {
+  local path="$1"
+
+  # Git Bash accepts both /c/... and C:/... paths, but its Unix tools are
+  # more reliable with the former. Normalize native Windows paths at the
+  # shell boundary while leaving POSIX paths unchanged elsewhere.
+  case "$(uname -s)" in
+    MINGW*|MSYS*|CYGWIN*)
+      if [[ "$path" =~ ^[A-Za-z]:[\\/].* ]] && command -v cygpath >/dev/null 2>&1; then
+        cygpath -u "$path"
+        return
+      fi
+      ;;
+  esac
+
+  printf "%s\n" "$path"
+}
 
 resolve_physical_path() {
   local path="$1"
   local link_target dir
 
   path="${path/#\~/$HOME}"
+  path="$(normalize_platform_path "$path")"
 
   if [[ "$path" != /* ]]; then
     path="$PWD/$path"
@@ -29,6 +58,7 @@ resolve_physical_path() {
 
 SCRIPT_PATH="$(resolve_physical_path "${BASH_SOURCE[0]}")"
 LLAMA_SERVER_CMD="${LLAMA_SERVER_CMD:-llama-server}"
+LLAMA_SERVER_CMD="$(normalize_platform_path "$LLAMA_SERVER_CMD")"
 NGL_DEFAULT="${NGL_DEFAULT:-99}"
 LLAMA_AUTO_MMPROJ="${LLAMA_AUTO_MMPROJ:-1}"
 LLAMA_AUTO_JINJA="${LLAMA_AUTO_JINJA:-1}"
@@ -48,6 +78,7 @@ elif [[ -n "${HF_HOME:-}" ]]; then
 else
   HF_CACHE_ROOT="$HOME/.cache/huggingface/hub"
 fi
+HF_CACHE_ROOT="$(normalize_platform_path "$HF_CACHE_ROOT")"
 
 declare -a MODELS=()
 
@@ -146,6 +177,7 @@ resolve_target_path() {
   local input="${1:-$(default_install_target)}"
 
   input="${input/#\~/$HOME}"
+  input="$(normalize_platform_path "$input")"
 
   if [[ "$input" != /* ]]; then
     printf "%s\n" "$PWD/$input"
@@ -478,36 +510,37 @@ default_tools_value() {
   printf "%s\n" "$LLAMA_DEFAULT_TOOLS"
 }
 
-append_common_server_args() {
-  local -n __args="$1"
+run_llama_server() {
+  # Bash 3.2 (the version shipped with macOS) has no nameref variables.
+  # Receive the number of base arguments, then the base and user arguments.
+  local base_arg_count="$1"
   shift
+  local -a server_args=()
+  local i
+
+  for ((i = 0; i < base_arg_count; i++)); do
+    server_args+=("$1")
+    shift
+  done
 
   if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
-    __args+=("--jinja")
+    server_args+=("--jinja")
   fi
   if tools_enabled && ! has_tools_arg "$@"; then
-    __args+=("--tools" "$(default_tools_value)")
+    server_args+=("--tools" "$(default_tools_value)")
   fi
   if ! has_ctk_arg "$@"; then
-    __args+=("-ctk" "$LLAMA_DEFAULT_CTK")
+    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
   fi
   if ! has_ctv_arg "$@"; then
-    __args+=("-ctv" "$LLAMA_DEFAULT_CTV")
+    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
   fi
   if ! has_np_arg "$@"; then
-    __args+=("-np" "$LLAMA_DEFAULT_NP")
+    server_args+=("-np" "$LLAMA_DEFAULT_NP")
   fi
   if ! has_fa_arg "$@"; then
-    __args+=("-fa" "$LLAMA_DEFAULT_FA")
+    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
   fi
-}
-
-run_llama_server() {
-  local -n __base_args="$1"
-  shift
-  local -a server_args=("${__base_args[@]}")
-
-  append_common_server_args server_args "$@"
 
   if [[ $# -gt 0 ]]; then
     server_args+=("$@")
@@ -755,15 +788,16 @@ collect_models() {
   fi
 
   while IFS= read -r path; do
-    local base
+    local base base_lower
     base="$(basename "$path")"
+    base_lower="$(printf "%s" "$base" | tr '[:upper:]' '[:lower:]')"
     # skip GGUF files that were generated from .mmproj exports
     # (they often include the substring 'mmproj' in the filename)
     if [[ "$base" == *mmproj* ]]; then
       continue
     fi
     # skip standalone MTP draft models; they are loaded alongside the main model
-    if [[ "${base,,}" == mtp-*.gguf ]]; then
+    if [[ "$base_lower" == mtp-*.gguf ]]; then
       continue
     fi
     MODELS+=("$path")
@@ -841,6 +875,7 @@ resolve_model() {
   if [[ "$input" == *.gguf || "$input" == *.GGUF ]]; then
     local expanded_input
     expanded_input="${input/#\~/$HOME}"
+    expanded_input="$(normalize_platform_path "$expanded_input")"
     if [[ -f "$expanded_input" ]]; then
       printf "%s\n" "$expanded_input"
       return 0
@@ -953,7 +988,7 @@ cmd_start() {
   fi
 
   echo "Using model: $model_path"
-  run_llama_server base_args "$@"
+  run_llama_server "${#base_args[@]}" "${base_args[@]}" "$@"
 }
 
 cmd_remove() {
@@ -1010,7 +1045,7 @@ cmd_hf() {
   # not contain a compatible mtp-*.gguf artifact, and an explicit
   # --model-draft or --spec-type must always be left untouched. Users can
   # still opt into MTP explicitly by passing the relevant llama-server flags.
-  run_llama_server base_args "$@"
+  run_llama_server "${#base_args[@]}" "${base_args[@]}" "$@"
 }
 
 cmd_check_updates() {
@@ -1031,9 +1066,12 @@ EOF
     return 0
   fi
 
-  declare -A repo_current_commit
-  declare -A repo_files
-  local path repo commit
+  # Keep these as indexed arrays: Bash 3.2 (macOS) does not support
+  # associative arrays.
+  local -a repo_names=()
+  local -a repo_current_commits=()
+  local -a repo_file_lists=()
+  local path repo commit repo_index i
 
   for path in "${MODELS[@]}"; do
     repo="$(model_repo_from_path "$path")"
@@ -1043,26 +1081,41 @@ EOF
 
     commit="${path#*/snapshots/}"
     commit="${commit%%/*}"
+    repo_index=-1
+    for i in "${!repo_names[@]}"; do
+      if [[ "${repo_names[$i]}" == "$repo" ]]; then
+        repo_index="$i"
+        break
+      fi
+    done
 
-    repo_current_commit["$repo"]="$commit"
-    if [[ -z "${repo_files[$repo]:-}" ]]; then
-      repo_files["$repo"]="$path"
+    if (( repo_index < 0 )); then
+      repo_names+=("$repo")
+      repo_current_commits+=("$commit")
+      repo_file_lists+=("$path")
     else
-      repo_files["$repo"]="${repo_files[$repo]}"$'\n'"$path"
+      repo_file_lists[$repo_index]="${repo_file_lists[$repo_index]}"$'\n'"$path"
     fi
   done
 
-  if [[ ${#repo_current_commit[@]} -eq 0 ]]; then
+  if [[ ${#repo_names[@]} -eq 0 ]]; then
     echo "No Hugging Face models found to check."
     return 0
   fi
 
-  echo "Checking ${#repo_current_commit[@]} repo(s) for updates..."
+  echo "Checking ${#repo_names[@]} repo(s) for updates..."
   echo
 
-  local current_commit latest_commit file repo
+  local current_commit latest_commit file
   while IFS= read -r repo; do
-    current_commit="${repo_current_commit[$repo]}"
+    repo_index=-1
+    for i in "${!repo_names[@]}"; do
+      if [[ "${repo_names[$i]}" == "$repo" ]]; then
+        repo_index="$i"
+        break
+      fi
+    done
+    current_commit="${repo_current_commits[$repo_index]}"
     latest_commit="$(fetch_latest_sha "$repo")"
 
     if [[ -z "$latest_commit" ]]; then
@@ -1080,8 +1133,8 @@ EOF
 
     while IFS= read -r file; do
       [[ -n "$file" ]] && printf "  - %s\n" "$(basename "$file")"
-    done <<< "${repo_files[$repo]}"
-  done < <(printf "%s\n" "${!repo_current_commit[@]}" | sort)
+    done <<< "${repo_file_lists[$repo_index]}"
+  done < <(printf "%s\n" "${repo_names[@]}" | sort)
 }
 
 cmd_update() {
@@ -1191,7 +1244,7 @@ cmd_update() {
   fi
 
   local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
-  run_llama_server base_args "${user_server_args[@]}"
+  run_llama_server "${#base_args[@]}" "${base_args[@]}" "${user_server_args[@]}"
 }
 
 cmd_install() {

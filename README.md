@@ -20,12 +20,16 @@ Script: `./llama-models.sh`
 
 - `llama-server` available in your `PATH`
 - Hugging Face cache present (usually `~/.cache/huggingface/hub`)
-- A bash-compatible shell
+- Bash 3.2 or newer (`bash --version`), plus the usual POSIX tools (`find`, `sed`, `tr`, `basename`, `dirname`, `readlink`)
+
+The script is a Bash script even when launched from a zsh prompt. Use `./llama-models.sh ...`; do not run it as `zsh llama-models.sh ...` or `sh llama-models.sh ...`.
 
 Windows notes:
 
-- Run the script from Git Bash, MSYS2, Cygwin, or WSL.
-- `install` creates a symlink, which may require Windows Developer Mode or an elevated shell.
+- Run the script from 64-bit Git Bash (MINGW64), MSYS2, Cygwin, or WSL. Git Bash must have Bash and `find`, `sed`, `tr`, `basename`, `dirname`, and `readlink` available.
+- Git Bash paths such as `/c/Users/...` are supported. Native `C:/Users/...` paths are normalized when passed to the wrapper.
+- `llama-server` must also be invokable from that same Bash environment; set `LLAMA_SERVER_CMD` to its path if it is not on `PATH`.
+- `install` creates a symlink, which may require Windows Developer Mode or an elevated shell. If symlink creation is unavailable, run the script directly instead of using `install`.
 
 ## Install / uninstall
 
