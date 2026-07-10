@@ -73,8 +73,7 @@ Commands:
                  --spec-draft-n-max $LLAMA_DEFAULT_SPEC_DRAFT_N_MAX.
   remove         Preview and remove a local GGUF model plus safe associated files.
   hf             Start llama-server directly from a Hugging Face repo via -hf.
-                 Enables MTP with --spec-type draft-mtp
-                 --spec-draft-n-max $LLAMA_DEFAULT_SPEC_DRAFT_N_MAX.
+                 MTP remains opt-in because not every repo provides a compatible draft model.
   check-updates  Check cached Hugging Face repos for newer commits on the
                  default branch and report which models have updates.
   update         Re-run llama-server -hf for a repo to fetch the latest version.
@@ -1007,13 +1006,10 @@ cmd_hf() {
 
   local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
 
-  if autoload_mtp_enabled && ! has_spec_type_arg "$@"; then
-    base_args+=("--spec-type" "draft-mtp")
-    if ! has_spec_draft_n_max_arg "$@"; then
-      base_args+=("--spec-draft-n-max" "$LLAMA_DEFAULT_SPEC_DRAFT_N_MAX")
-    fi
-  fi
-
+  # Do not infer MTP support from the repo id alone. Hugging Face repos may
+  # not contain a compatible mtp-*.gguf artifact, and an explicit
+  # --model-draft or --spec-type must always be left untouched. Users can
+  # still opt into MTP explicitly by passing the relevant llama-server flags.
   run_llama_server base_args "$@"
 }
 
