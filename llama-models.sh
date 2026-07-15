@@ -59,13 +59,13 @@ resolve_physical_path() {
 SCRIPT_PATH="$(resolve_physical_path "${BASH_SOURCE[0]}")"
 LLAMA_SERVER_CMD="${LLAMA_SERVER_CMD:-llama-server}"
 LLAMA_SERVER_CMD="$(normalize_platform_path "$LLAMA_SERVER_CMD")"
-NGL_DEFAULT="${NGL_DEFAULT:-99}"
+LLAMA_FIT_PARAMS_CMD="${LLAMA_FIT_PARAMS_CMD:-llama-fit-params}"
+LLAMA_FIT_PARAMS_CMD="$(normalize_platform_path "$LLAMA_FIT_PARAMS_CMD")"
 LLAMA_AUTO_MMPROJ="${LLAMA_AUTO_MMPROJ:-1}"
-LLAMA_AUTO_JINJA="${LLAMA_AUTO_JINJA:-1}"
 LLAMA_ENABLE_TOOLS="${LLAMA_ENABLE_TOOLS:-1}"
 LLAMA_DEFAULT_TOOLS="${LLAMA_DEFAULT_TOOLS:-read_file,file_glob_search,grep_search,get_datetime}"
 LLAMA_DEFAULT_CTK="${LLAMA_DEFAULT_CTK:-q8_0}"
-LLAMA_DEFAULT_CTV="${LLAMA_DEFAULT_CTV:-q4_1}"
+LLAMA_DEFAULT_CTV="${LLAMA_DEFAULT_CTV:-q8_0}"
 LLAMA_DEFAULT_NP="${LLAMA_DEFAULT_NP:-1}"
 LLAMA_DEFAULT_FA="${LLAMA_DEFAULT_FA:-on}"
 LLAMA_AUTO_MTP="${LLAMA_AUTO_MTP:-1}"
@@ -89,6 +89,7 @@ Usage:
   $SCRIPT_NAME start <index|query|/path/to/model.gguf> [llama-server args...]
   $SCRIPT_NAME remove <index|query|/path/to/model.gguf>
   $SCRIPT_NAME hf <repo-id> [llama-server args...]
+  $SCRIPT_NAME fit-params <index|query|/path/to/model.gguf> | -hf <repo-id>[:quant] [llama-server args...]
   $SCRIPT_NAME check-updates
   $SCRIPT_NAME update [--clean] <index|query|repo-id> [llama-server args...]
   $SCRIPT_NAME install [target-link-path]
@@ -105,6 +106,13 @@ Commands:
   remove         Preview and remove a local GGUF model plus safe associated files.
   hf             Start llama-server directly from a Hugging Face repo via -hf.
                  MTP remains opt-in because not every repo provides a compatible draft model.
+  fit-params     Test whether a model fits in device memory via llama-fit-params.
+                 Prints the fitted CLI arguments (-c/-ngl chosen by --fit) by
+                 default; append -fitp on to print the estimated memory
+                 (model/context/compute) per device instead.
+                 Applies the same -ctk/-ctv/-np/-fa defaults as start/hf;
+                 mmproj/MTP are not auto-loaded because llama-fit-params does
+                 not accept them.
   check-updates  Check cached Hugging Face repos for newer commits on the
                  default branch and report which models have updates.
   update         Re-run llama-server -hf for a repo to fetch the latest version.
@@ -114,8 +122,14 @@ Commands:
   help           Show this help.
 
 Default llama-server flags (added for start/hf unless overridden):
-  -ngl $NGL_DEFAULT, --jinja, -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV,
+  -ctk $LLAMA_DEFAULT_CTK, -ctv $LLAMA_DEFAULT_CTV,
   -np $LLAMA_DEFAULT_NP, -fa $LLAMA_DEFAULT_FA
+
+--jinja is enabled by default in llama-server, so the wrapper does not add it;
+pass --no-jinja to opt out. -ngl is not added either; --fit (on by default)
+tunes it to fit device memory, so pass -ngl explicitly to pin a value.
+fit-params applies the same -ctk/-ctv/-np/-fa defaults but omits --tools,
+which llama-fit-params does not support.
 
 Examples:
   $SCRIPT_NAME list
@@ -127,6 +141,10 @@ Examples:
   LLAMA_DEFAULT_TOOLS=all $SCRIPT_NAME start 1
   $SCRIPT_NAME remove 1
   $SCRIPT_NAME hf ggml-org/gemma-4-e4b-it-GGUF --port 8080
+  $SCRIPT_NAME fit-params 1
+  $SCRIPT_NAME fit-params gemma-4-E4B-it-Q4_K_M
+  $SCRIPT_NAME fit-params -hf unsloth/Qwen3.6-27B-MTP-GGUF:UD-Q4_K_XL
+  $SCRIPT_NAME fit-params 1 -c 32768 -fit off
   $SCRIPT_NAME check-updates
   $SCRIPT_NAME update 1
   $SCRIPT_NAME update unsloth/gemma-4-12B-it-qat-GGUF
@@ -137,15 +155,15 @@ Examples:
 
 Config (optional env vars):
   LLAMA_SERVER_CMD  Command to run llama server (default: llama-server)
-  NGL_DEFAULT       Default value for -ngl (default: 99)
-  LLAMA_AUTO_JINJA  Add --jinja by default; set to 0/false/no/off to opt out
+  LLAMA_FIT_PARAMS_CMD
+                    Command to run llama-fit-params (default: llama-fit-params)
   LLAMA_ENABLE_TOOLS
                     Enable default tools; set to 0/false/no/off to opt out
   LLAMA_DEFAULT_TOOLS
                     Default --tools value (default: read_file,file_glob_search,
                     grep_search,get_datetime; set to all to opt in to all tools)
   LLAMA_DEFAULT_CTK Default value for -ctk (default: q8_0)
-  LLAMA_DEFAULT_CTV Default value for -ctv (default: q4_1)
+  LLAMA_DEFAULT_CTV Default value for -ctv (default: q8_0)
   LLAMA_DEFAULT_NP  Default value for -np (default: 1)
   LLAMA_DEFAULT_FA  Default value for -fa (default: on)
   LLAMA_AUTO_MTP    Auto-load MTP draft models for supported models (default: 1)
@@ -355,8 +373,8 @@ tools_enabled() {
   esac
 }
 
-autoload_jinja_enabled() {
-  case "$LLAMA_AUTO_JINJA" in
+autoload_mmproj_enabled() {
+  case "$LLAMA_AUTO_MMPROJ" in
     0|false|no|off)
       return 1
       ;;
@@ -386,20 +404,6 @@ has_tools_arg() {
   for arg in "$@"; do
     case "$arg" in
       --tools|--tools=*)
-        return 0
-        ;;
-    esac
-  done
-
-  return 1
-}
-
-has_jinja_arg() {
-  local arg
-
-  for arg in "$@"; do
-    case "$arg" in
-      --jinja)
         return 0
         ;;
     esac
@@ -510,44 +514,65 @@ default_tools_value() {
   printf "%s\n" "$LLAMA_DEFAULT_TOOLS"
 }
 
-run_llama_server() {
-  # Bash 3.2 (the version shipped with macOS) has no nameref variables.
-  # Receive the number of base arguments, then the base and user arguments.
-  local base_arg_count="$1"
-  shift
-  local -a server_args=()
+# Assemble default llama.cpp flags for the given mode, append the caller's
+# arguments, then execute the matching binary.
+#
+# Modes:
+#   server      llama-server: adds --tools defaults
+#   fit-params  llama-fit-params: no --tools (the tool does not accept them)
+#               and no mmproj/MTP auto-loading
+#
+# Both modes share the KV-cache and perf defaults (-ctk, -ctv, -np, -fa),
+# each skipped when the caller already passes the corresponding flag. --jinja
+# is not added because llama-server enables it by default (pass --no-jinja to
+# opt out); -ngl is not added because --fit (on by default) tunes it.
+#
+# Bash 3.2 (the version shipped with macOS) has no nameref variables, so the
+# base arguments are passed as a count followed by their values, then the
+# user arguments.
+run_llama_tool() {
+  local mode="$1"
+  local base_arg_count="$2"
+  shift 2
+  local -a args=()
   local i
 
   for ((i = 0; i < base_arg_count; i++)); do
-    server_args+=("$1")
+    args+=("$1")
     shift
   done
 
-  if autoload_jinja_enabled && ! has_jinja_arg "$@"; then
-    server_args+=("--jinja")
+  if [[ "$mode" == "server" ]]; then
+    if tools_enabled && ! has_tools_arg "$@"; then
+      args+=("--tools" "$(default_tools_value)")
+    fi
   fi
-  if tools_enabled && ! has_tools_arg "$@"; then
-    server_args+=("--tools" "$(default_tools_value)")
-  fi
+
   if ! has_ctk_arg "$@"; then
-    server_args+=("-ctk" "$LLAMA_DEFAULT_CTK")
+    args+=("-ctk" "$LLAMA_DEFAULT_CTK")
   fi
   if ! has_ctv_arg "$@"; then
-    server_args+=("-ctv" "$LLAMA_DEFAULT_CTV")
+    args+=("-ctv" "$LLAMA_DEFAULT_CTV")
   fi
   if ! has_np_arg "$@"; then
-    server_args+=("-np" "$LLAMA_DEFAULT_NP")
+    args+=("-np" "$LLAMA_DEFAULT_NP")
   fi
   if ! has_fa_arg "$@"; then
-    server_args+=("-fa" "$LLAMA_DEFAULT_FA")
+    args+=("-fa" "$LLAMA_DEFAULT_FA")
   fi
 
   if [[ $# -gt 0 ]]; then
-    server_args+=("$@")
+    args+=("$@")
   fi
 
-  echo "Running: $LLAMA_SERVER_CMD ${server_args[*]}"
-  "$LLAMA_SERVER_CMD" "${server_args[@]}"
+  local cmd
+  case "$mode" in
+    fit-params) cmd="$LLAMA_FIT_PARAMS_CMD" ;;
+    *)          cmd="$LLAMA_SERVER_CMD" ;;
+  esac
+
+  echo "Running: $cmd ${args[*]}"
+  "$cmd" "${args[@]}"
 }
 
 fetch_latest_sha() {
@@ -969,7 +994,7 @@ cmd_start() {
   local model_path
   model_path="$(resolve_model "$model_ref")"
 
-  local -a base_args=("-m" "$model_path" "-ngl" "$NGL_DEFAULT")
+  local -a base_args=("-m" "$model_path")
   if autoload_mmproj_enabled && ! has_mmproj_arg "$@"; then
     local mmproj_path
     if mmproj_path="$(find_mmproj_for_model "$model_path")"; then
@@ -988,7 +1013,7 @@ cmd_start() {
   fi
 
   echo "Using model: $model_path"
-  run_llama_server "${#base_args[@]}" "${base_args[@]}" "$@"
+  run_llama_tool "server" "${#base_args[@]}" "${base_args[@]}" "$@"
 }
 
 cmd_remove() {
@@ -1039,13 +1064,47 @@ cmd_hf() {
   local repo_id="$1"
   shift
 
-  local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
+  local -a base_args=("-hf" "$repo_id")
 
   # Do not infer MTP support from the repo id alone. Hugging Face repos may
   # not contain a compatible mtp-*.gguf artifact, and an explicit
   # --model-draft or --spec-type must always be left untouched. Users can
   # still opt into MTP explicitly by passing the relevant llama-server flags.
-  run_llama_server "${#base_args[@]}" "${base_args[@]}" "$@"
+  run_llama_tool "server" "${#base_args[@]}" "${base_args[@]}" "$@"
+}
+
+cmd_fit_params() {
+  if [[ $# -lt 1 ]]; then
+    usage_error "fit-params requires <index|query|path> or -hf <repo-id>"
+  fi
+
+  require_command "$LLAMA_FIT_PARAMS_CMD"
+
+  local -a base_args=()
+  local model_ref model_path
+
+  case "$1" in
+    -hf|--hf-repo|-hfr)
+      if [[ $# -lt 2 ]]; then
+        usage_error "fit-params $1 requires <repo-id>"
+      fi
+      base_args+=("-hf" "$2")
+      echo "Using HF repo: $2"
+      shift 2
+      ;;
+    *)
+      model_ref="$1"
+      shift
+      model_path="$(resolve_model "$model_ref")"
+      base_args+=("-m" "$model_path")
+      echo "Using model: $model_path"
+      ;;
+  esac
+
+  # mmproj/MTP auto-loading is intentionally omitted because llama-fit-params
+  # does not accept those flags. Pass -fitp on explicitly to print the estimated
+  # memory instead of the fitted CLI arguments.
+  run_llama_tool "fit-params" "${#base_args[@]}" "${base_args[@]}" "$@"
 }
 
 cmd_check_updates() {
@@ -1244,8 +1303,8 @@ cmd_update() {
     echo "Re-running llama-server -hf for $repo_id to fetch the latest version."
   fi
 
-  local -a base_args=("-hf" "$repo_id" "-ngl" "$NGL_DEFAULT")
-  run_llama_server "${#base_args[@]}" "${base_args[@]}" "${user_server_args[@]}"
+  local -a base_args=("-hf" "$repo_id")
+  run_llama_tool "server" "${#base_args[@]}" "${base_args[@]}" "${user_server_args[@]}"
 }
 
 cmd_install() {
@@ -1376,6 +1435,10 @@ main() {
     hf)
       shift
       cmd_hf "$@"
+      ;;
+    fit-params)
+      shift
+      cmd_fit_params "$@"
       ;;
     check-updates)
       shift

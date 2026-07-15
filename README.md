@@ -7,6 +7,7 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 - Lists locally cached Hugging Face GGUF models in a compact repo-and-filename view by default
 - Starts a local GGUF model with the default `llama-server` flags (see below)
 - Starts directly from Hugging Face via `-hf` with the same default flags
+- Tests whether a model fits in device memory via `llama-fit-params`, printing the fitted CLI arguments by default (append `-fitp on` for the memory estimate) and exiting
 - Enables a safe built-in tool subset by default
 - Auto-loads a sibling `mmproj` file for `start` when one is found
 - Auto-loads a sibling `mtp-*.gguf` draft model for `start` when one is found
@@ -119,16 +120,12 @@ Pass extra `llama-server` args:
 The wrapper fills in these defaults for both `start` and `hf` unless you already pass the corresponding flags yourself:
 
 ```text
---jinja, -ctk q8_0, -ctv q4_1, -np 1, -fa on
+-ctk q8_0, -ctv q8_0, -np 1, -fa on
 ```
+
+`--jinja` is enabled by default in `llama-server`, so the wrapper does not add it (pass `--no-jinja` to opt out). `-ngl` is not added either; `llama-server`'s `--fit` (on by default) tunes it to fit device memory, so pass `-ngl` explicitly to pin a value. `fit-params` applies the same `-ctk`/`-ctv`/`-np`/`-fa` defaults but omits `--tools`, which `llama-fit-params` does not support.
 
 Manual overrides win, so explicit args such as `--cache-type-k q4_0`, `--cache-type-v q4_0`, `--parallel 2`, or `--flash-attn off` are left untouched.
-
-You can disable that default with:
-
-```bash
-LLAMA_AUTO_JINJA=0 ./llama-models.sh start 1
-```
 
 You can disable automatic MTP draft loading with:
 
@@ -176,6 +173,24 @@ Start directly from HF repo:
 
 ```bash
 ./llama-models.sh hf ggml-org/gemma-4-e4b-it-GGUF --port 8080
+```
+
+## Test whether a model fits
+
+Test whether a downloaded (or Hugging Face) model fits in device memory using `llama-fit-params`. It loads the model, runs the `--fit` logic, prints the fitted CLI arguments (`-c`/`-ngl` chosen by `--fit`), and exits without serving:
+
+```bash
+./llama-models.sh fit-params 1
+./llama-models.sh fit-params gemma-4-E4B-it-Q4_K_M
+./llama-models.sh fit-params -hf unsloth/Qwen3.6-27B-MTP-GGUF:UD-Q4_K_XL
+```
+
+Append `-fitp on` to print the estimated memory (model/context/compute) per device instead of the fitted arguments. The wrapper applies the same KV-cache/perf defaults as `start`/`hf` (`-ctk`, `-ctv`, `-np`, `-fa`); `-ngl` is left unset so `--fit` can tune it. `--tools`, `mmproj`, and MTP auto-loading are not applied because `llama-fit-params` does not accept them.
+
+To test an exact configuration (no auto-fitting), pass `-fit off`:
+
+```bash
+./llama-models.sh fit-params 1 -c 32768 -fit off
 ```
 
 ## Check for updates
@@ -252,12 +267,11 @@ Example: if only `Q4_K_M` is cached, querying `Q5_K_M gemma 4` will pick that `Q
 ## Optional environment variables
 
 - `LLAMA_SERVER_CMD` (default: `llama-server`)
-- `NGL_DEFAULT` (default: `99`)
-- `LLAMA_AUTO_JINJA` (default: `1`; set `0`, `false`, `no`, or `off` to opt out)
+- `LLAMA_FIT_PARAMS_CMD` (default: `llama-fit-params`)
 - `LLAMA_ENABLE_TOOLS` (default: `1`; set `0`, `false`, `no`, or `off` to opt out)
 - `LLAMA_DEFAULT_TOOLS` (default: `read_file,file_glob_search,grep_search,get_datetime`; set `all` to opt in to all tools)
 - `LLAMA_DEFAULT_CTK` (default: `q8_0`)
-- `LLAMA_DEFAULT_CTV` (default: `q4_1`)
+- `LLAMA_DEFAULT_CTV` (default: `q8_0`)
 - `LLAMA_DEFAULT_NP` (default: `1`)
 - `LLAMA_DEFAULT_FA` (default: `on`)
 - `LLAMA_AUTO_MMPROJ` (default: `1`)
@@ -269,5 +283,5 @@ Example: if only `Q4_K_M` is cached, querying `Q5_K_M gemma 4` will pick that `Q
 Example:
 
 ```bash
-NGL_DEFAULT=60 ./llama-models.sh start 1
+LLAMA_DEFAULT_CTK=q4_0 ./llama-models.sh start 1
 ```
