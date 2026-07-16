@@ -1143,8 +1143,8 @@ EOF
       repo_current_commits+=("$commit")
       repo_file_lists+=("$path")
     else
-      repo_current_commits[$repo_index]="$commit"
-      repo_file_lists[$repo_index]="${repo_file_lists[$repo_index]}"$'\n'"$path"
+      repo_current_commits[repo_index]="$commit"
+      repo_file_lists[repo_index]="${repo_file_lists[$repo_index]}"$'\n'"$path"
     fi
   done
 
