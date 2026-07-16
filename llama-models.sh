@@ -89,7 +89,8 @@ Usage:
   $SCRIPT_NAME start <index|query|/path/to/model.gguf> [llama-server args...]
   $SCRIPT_NAME remove <index|query|/path/to/model.gguf>
   $SCRIPT_NAME hf <repo-id> [llama-server args...]
-  $SCRIPT_NAME fit-params <index|query|/path/to/model.gguf> | -hf <repo-id>[:quant] [llama-server args...]
+  $SCRIPT_NAME fit-params <index|query|/path/to/model.gguf> [llama-fit-params args...]
+  $SCRIPT_NAME fit-params -hf <repo-id>[:quant] [llama-fit-params args...]
   $SCRIPT_NAME check-updates
   $SCRIPT_NAME update [--clean] <index|query|repo-id> [llama-server args...]
   $SCRIPT_NAME install [target-link-path]
@@ -364,17 +365,6 @@ autoload_mtp_enabled() {
 
 tools_enabled() {
   case "$LLAMA_ENABLE_TOOLS" in
-    0|false|no|off)
-      return 1
-      ;;
-    *)
-      return 0
-      ;;
-  esac
-}
-
-autoload_mmproj_enabled() {
-  case "$LLAMA_AUTO_MMPROJ" in
     0|false|no|off)
       return 1
       ;;
