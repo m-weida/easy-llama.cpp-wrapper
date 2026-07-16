@@ -6,14 +6,23 @@ fetch_latest_sha() {
   local api_url="https://huggingface.co/api/models/$repo_id"
   local response
 
-  response="$(curl -s --max-time 30 "$api_url" 2>/dev/null)"
+  if ! response="$(curl -s --max-time 30 "$api_url" 2>/dev/null)"; then
+    printf "\n"
+    return 0
+  fi
   if [[ -z "$response" ]]; then
-    return 1
+    printf "\n"
+    return 0
   fi
 
   if command -v jq >/dev/null 2>&1; then
-    printf "%s" "$response" | jq -r '.sha // empty'
-    return
+    local latest_sha
+    if ! latest_sha="$(printf "%s" "$response" | jq -er '.sha // empty' 2>/dev/null)"; then
+      printf "\n"
+      return 0
+    fi
+    printf "%s\n" "$latest_sha"
+    return 0
   fi
 
   # Fallback: extract the top-level sha from a flat JSON object.
