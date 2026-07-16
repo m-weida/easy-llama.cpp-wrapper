@@ -17,6 +17,8 @@ Small helper script for `llama.cpp` (`llama-server`) for bash-compatible shells 
 
 Script: `./llama-models.sh`
 
+The executable is intentionally kept as a small entrypoint. Its Bash implementation is split into source-only modules under `lib/` for platform/path handling, model discovery, llama.cpp invocation, attachment discovery, commands, and dispatch. Run the entrypoint rather than sourcing the individual modules directly.
+
 ## Requirements
 
 - `llama-server` available in your `PATH`
